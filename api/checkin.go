@@ -6,15 +6,39 @@ import (
 	"net/url"
 )
 
-// CheckinStat is one day of the caller's monthly check-in history.
-// Field shape mirrors what GetUserCheckinStats emits — we keep it
-// loose (map[string]any) at the top level so a backend schema bump
-// (e.g. adding a streak field) doesn't force an SDK release.
+// CheckinRecord is one day of the caller's check-in history. Mirrors
+// backend model.CheckinRecord (the public-safe view that strips
+// id / user_id from the underlying Checkin row).
+type CheckinRecord struct {
+	CheckinDate  string `json:"checkin_date"`
+	QuotaAwarded int    `json:"quota_awarded"`
+}
+
+// CheckinStats is what backend model.GetUserCheckinStats emits.
+// Despite the name "stats" this is a single object, NOT a list — an
+// earlier SDK release declared it as []map[string]any and the
+// /api/user/checkin response immediately failed to decode. Surface
+// the fields the dashboard renders (per-month + per-account totals)
+// as typed columns so callers don't have to guess.
+type CheckinStats struct {
+	// TotalQuota / TotalCheckins are all-time aggregates across the
+	// user's full history, irrespective of which month is queried.
+	TotalQuota    int64 `json:"total_quota"`
+	TotalCheckins int64 `json:"total_checkins"`
+	// CheckinCount is the count for the queried month only.
+	CheckinCount   int             `json:"checkin_count"`
+	CheckedInToday bool            `json:"checked_in_today"`
+	Records        []CheckinRecord `json:"records"`
+}
+
+// CheckinStatus is the /api/user/checkin payload. Min/MaxQuota
+// bound the random reward range; Stats carries the per-month and
+// lifetime aggregates.
 type CheckinStatus struct {
-	Enabled  bool                     `json:"enabled"`
-	MinQuota int                      `json:"min_quota"`
-	MaxQuota int                      `json:"max_quota"`
-	Stats    []map[string]any         `json:"stats"`
+	Enabled  bool         `json:"enabled"`
+	MinQuota int          `json:"min_quota"`
+	MaxQuota int          `json:"max_quota"`
+	Stats    CheckinStats `json:"stats"`
 }
 
 // CheckinResult is what DoCheckin returns on a successful check-in.

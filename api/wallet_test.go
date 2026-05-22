@@ -134,7 +134,14 @@ func TestGetCheckinStatus(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"success":true,"data":{
 			"enabled":true,"min_quota":100,"max_quota":1000,
-			"stats":[{"checkin_date":"2026-05-01","quota_awarded":500}]
+			"stats":{
+				"total_quota":12345,"total_checkins":42,"checkin_count":3,"checked_in_today":true,
+				"records":[
+					{"checkin_date":"2026-05-01","quota_awarded":500},
+					{"checkin_date":"2026-05-15","quota_awarded":700},
+					{"checkin_date":"2026-05-22","quota_awarded":150}
+				]
+			}
 		}}`))
 	}))
 	defer srv.Close()
@@ -142,8 +149,14 @@ func TestGetCheckinStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCheckinStatus: %v", err)
 	}
-	if !st.Enabled || st.MinQuota != 100 || st.MaxQuota != 1000 || len(st.Stats) != 1 {
-		t.Errorf("got %+v", st)
+	if !st.Enabled || st.MinQuota != 100 || st.MaxQuota != 1000 {
+		t.Errorf("scalar fields: %+v", st)
+	}
+	if st.Stats.TotalQuota != 12345 || st.Stats.TotalCheckins != 42 || st.Stats.CheckinCount != 3 || !st.Stats.CheckedInToday {
+		t.Errorf("stats aggregates: %+v", st.Stats)
+	}
+	if len(st.Stats.Records) != 3 || st.Stats.Records[0].CheckinDate != "2026-05-01" || st.Stats.Records[0].QuotaAwarded != 500 {
+		t.Errorf("stats records: %+v", st.Stats.Records)
 	}
 }
 

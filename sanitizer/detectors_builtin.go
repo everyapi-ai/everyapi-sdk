@@ -239,6 +239,33 @@ func chineseIDValid(s string) bool {
 // user ever runs `everyapi proxy start`).
 var _ = BuiltinDetectors
 
+// builtinDescriptions is the one-line summary for each detector, used
+// by the `everyapi proxy configure` multi-select page so the user
+// doesn't have to read the regex source to know what each rule
+// catches. Keep entries short (~50 chars) — they render in-line
+// next to the detector name.
+var builtinDescriptions = map[string]string{
+	DetectorAnthropicKey:   "Anthropic API key (sk-ant-…)",
+	DetectorOpenAIKey:      "OpenAI API key (sk-… , also proj-/svcacct- variants)",
+	DetectorGroqKey:        "Groq API key (gsk_…)",
+	DetectorGoogleAPIKey:   "Google / Gemini API key (AIza…)",
+	DetectorGitHubToken:    "GitHub PAT / OAuth token (ghp_/gho_/github_pat_/…)",
+	DetectorSlackToken:     "Slack token (xoxb-/xoxa-/xoxp-/xoxr-/xoxs-)",
+	DetectorStripeKey:      "Stripe secret / restricted key (sk_/rk_ live or test)",
+	DetectorAWSAccessKey:   "AWS access key ID (AKIA/ASIA/AGPA/…)",
+	DetectorPEMPrivateKey:  "PEM-encoded private key block",
+	DetectorLuhnCreditCard: "Credit card number (13–19 digits + Luhn check)",
+	DetectorChineseID:      "Chinese resident ID (18 digits + ISO-7064 checksum)",
+}
+
+// DescribeBuiltin returns the one-line summary for a built-in
+// detector name, or empty string for an unknown name. Stable enough
+// to surface in UI; the descriptions track the regexes above so a
+// detector tweak should refresh the matching entry here.
+func DescribeBuiltin(name string) string {
+	return builtinDescriptions[name]
+}
+
 // UserPattern is the on-disk form of a user-defined regex rule. The
 // proxy reads these from ~/.config/everyapi/sanitizer.toml (this PR
 // only handles in-memory wiring; the toml parser lands in the next

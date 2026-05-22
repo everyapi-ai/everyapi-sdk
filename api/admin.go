@@ -6,6 +6,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -50,7 +51,7 @@ func (c *Client) AdminListUsers(ctx context.Context, page, pageSize int) ([]Admi
 		return nil, 0, err
 	}
 	if !env.Success {
-		return nil, 0, fmt.Errorf("admin list users: %s", env.Message)
+		return nil, 0, errors.New(env.Message)
 	}
 	return env.Data.Items, env.Data.Total, nil
 }
@@ -72,7 +73,7 @@ func (c *Client) AdminSearchUsers(ctx context.Context, keyword string) ([]AdminU
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("admin search users: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return env.Data, nil
 }
@@ -91,7 +92,7 @@ func (c *Client) AdminGetUser(ctx context.Context, id int) (*AdminUserRow, error
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("admin get user: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return &env.Data, nil
 }
@@ -125,7 +126,7 @@ func (c *Client) AdminManageUser(ctx context.Context, req AdminManageRequest) er
 		return err
 	}
 	if !env.Success {
-		return fmt.Errorf("admin manage: %s", env.Message)
+		return errors.New(env.Message)
 	}
 	return nil
 }
@@ -145,7 +146,7 @@ func (c *Client) AdminDeleteUser(ctx context.Context, id int) error {
 		return err
 	}
 	if !env.Success {
-		return fmt.Errorf("admin delete user: %s", env.Message)
+		return errors.New(env.Message)
 	}
 	return nil
 }
@@ -168,7 +169,7 @@ func (c *Client) AdminTestChannel(ctx context.Context, id int) (map[string]any, 
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("admin test channel: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return env.Data, nil
 }
@@ -195,7 +196,7 @@ func (c *Client) AdminTagChannels(ctx context.Context, tag string, enable bool) 
 		return err
 	}
 	if !env.Success {
-		return fmt.Errorf("admin tag channels: %s", env.Message)
+		return errors.New(env.Message)
 	}
 	return nil
 }
@@ -294,7 +295,7 @@ func (c *Client) AdminListLogs(ctx context.Context, f AdminLogFilter) ([]AdminLo
 		return nil, 0, err
 	}
 	if !env.Success {
-		return nil, 0, fmt.Errorf("admin list logs: %s", env.Message)
+		return nil, 0, errors.New(env.Message)
 	}
 	return env.Data.Items, env.Data.Total, nil
 }
@@ -346,7 +347,7 @@ func (c *Client) AdminListAbuseReports(ctx context.Context, status string, page,
 		return nil, 0, err
 	}
 	if !env.Success {
-		return nil, 0, fmt.Errorf("admin list abuse: %s", env.Message)
+		return nil, 0, errors.New(env.Message)
 	}
 	return env.Data.Items, env.Data.Total, nil
 }
@@ -365,7 +366,7 @@ func (c *Client) AdminGetAbuseReport(ctx context.Context, id int) (*AbuseReport,
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("admin get abuse: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return &env.Data, nil
 }
@@ -387,7 +388,7 @@ func (c *Client) AdminUpdateAbuseReport(ctx context.Context, id int, status, not
 		return err
 	}
 	if !env.Success {
-		return fmt.Errorf("admin update abuse: %s", env.Message)
+		return errors.New(env.Message)
 	}
 	return nil
 }
@@ -432,7 +433,7 @@ func (c *Client) AdminListAuditLog(ctx context.Context, page, pageSize int) ([]A
 		return nil, 0, err
 	}
 	if !env.Success {
-		return nil, 0, fmt.Errorf("admin audit log: %s", env.Message)
+		return nil, 0, errors.New(env.Message)
 	}
 	return env.Data.Items, env.Data.Total, nil
 }

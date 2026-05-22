@@ -11,6 +11,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -80,7 +81,7 @@ func (c *Client) RegenerateBackupCodes(ctx context.Context, code string) ([]stri
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("regenerate backup codes: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return env.Data.BackupCodes, nil
 }
@@ -105,7 +106,7 @@ func (c *Client) GetPasskeyStatus(ctx context.Context) (*PasskeyStatus, error) {
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("passkey status: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return &env.Data, nil
 }
@@ -131,7 +132,7 @@ func (c *Client) ListOAuthBindings(ctx context.Context) ([]OAuthBinding, error) 
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("list oauth bindings: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return env.Data, nil
 }
@@ -149,7 +150,7 @@ func (c *Client) UnbindOAuth(ctx context.Context, providerID int) error {
 		return err
 	}
 	if !env.Success {
-		return fmt.Errorf("unbind oauth: %s", env.Message)
+		return errors.New(env.Message)
 	}
 	return nil
 }
@@ -166,7 +167,7 @@ func (c *Client) GetAffCode(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if !env.Success {
-		return "", fmt.Errorf("get aff code: %s", env.Message)
+		return "", errors.New(env.Message)
 	}
 	return env.Data, nil
 }
@@ -183,7 +184,7 @@ func (c *Client) ResetAffCode(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if !env.Success {
-		return "", fmt.Errorf("reset aff code: %s", env.Message)
+		return "", errors.New(env.Message)
 	}
 	return env.Data, nil
 }

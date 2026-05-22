@@ -49,10 +49,10 @@ func TestStartSellerCodexOAuth_HappyPath(t *testing.T) {
 // of pending / slow_down / expired / denied / authorized.
 func TestSellerCodexPoll_StateClassification(t *testing.T) {
 	cases := []struct {
-		name    string
-		body    string
-		want    SellerCodexPollState
-		wantID  int
+		name   string
+		body   string
+		want   SellerCodexPollState
+		wantID int
 	}{
 		{"pending", `{"success":false,"code":"pending"}`, SellerCodexPollPending, 0},
 		{"slow_down", `{"success":false,"code":"slow_down"}`, SellerCodexPollSlowDown, 0},

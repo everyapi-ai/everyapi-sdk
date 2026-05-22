@@ -23,17 +23,17 @@ func TestIsOfficialEveryAPIHost(t *testing.T) {
 		{"api.everyapi.ai", true},
 		{"app.everyapi.ai", true},
 		{"a.b.everyapi.ai", true},
-		{"EVERYAPI.AI", true},          // case-insensitive
-		{"api.everyapi.ai:443", true},  // defensive port strip
-		{"  app.everyapi.ai  ", true},  // trimmed
-		{"everyapi.ai.", true},         // rooted FQDN
-		{"api.everyapi.ai.", true},     // rooted FQDN subdomain
+		{"EVERYAPI.AI", true},         // case-insensitive
+		{"api.everyapi.ai:443", true}, // defensive port strip
+		{"  app.everyapi.ai  ", true}, // trimmed
+		{"everyapi.ai.", true},        // rooted FQDN
+		{"api.everyapi.ai.", true},    // rooted FQDN subdomain
 		{"localhost", false},
 		{"127.0.0.1", false},
 		{"", false},
 		{"everyapipro.com", false},
 		{"noteveryapi.ai", false},
-		{"xeveryapi.ai", false},        // suffix "everyapi.ai" but not ".everyapi.ai"
+		{"xeveryapi.ai", false}, // suffix "everyapi.ai" but not ".everyapi.ai"
 		{"everyapi.ai.evil.com", false},
 		{"evil.com", false},
 	}

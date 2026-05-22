@@ -2,7 +2,7 @@ package api
 
 import (
 	"context"
-	"fmt"
+	"errors"
 )
 
 // SelfData is the subset of /api/user/self the CLI reads. The full
@@ -37,7 +37,7 @@ func (c *Client) GetSelf(ctx context.Context) (*SelfData, error) {
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("get self: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return &env.Data, nil
 }
@@ -60,7 +60,7 @@ func (c *Client) GetStatus(ctx context.Context) (*StatusData, error) {
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("get status: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return &env.Data, nil
 }

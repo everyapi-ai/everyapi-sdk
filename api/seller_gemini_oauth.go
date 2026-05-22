@@ -12,7 +12,7 @@ package api
 
 import (
 	"context"
-	"fmt"
+	"errors"
 )
 
 // SellerGeminiOAuthStart is the response from /start. AuthorizeURL is
@@ -44,7 +44,7 @@ func (c *Client) StartSellerGeminiOAuth(ctx context.Context, name, models, redir
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("start gemini oauth: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return &env.Data, nil
 }
@@ -78,7 +78,7 @@ func (c *Client) CompleteSellerGeminiOAuth(ctx context.Context, code, state stri
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("complete gemini oauth: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return &SellerGeminiOAuthResult{
 		ChannelID:   env.Data.Channel.ID,

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -55,7 +56,7 @@ func (c *Client) GetTopupInfo(ctx context.Context) (*TopupInfo, error) {
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("topup info: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return &env.Data, nil
 }
@@ -90,7 +91,7 @@ func (c *Client) ListUserTopups(ctx context.Context, page, pageSize int, keyword
 		return nil, 0, err
 	}
 	if !env.Success {
-		return nil, 0, fmt.Errorf("list topups: %s", env.Message)
+		return nil, 0, errors.New(env.Message)
 	}
 	return env.Data.Items, env.Data.Total, nil
 }
@@ -115,7 +116,7 @@ func (c *Client) Redeem(ctx context.Context, key string) (int64, error) {
 		return 0, err
 	}
 	if !env.Success {
-		return 0, fmt.Errorf("redeem: %s", env.Message)
+		return 0, errors.New(env.Message)
 	}
 	return env.Data, nil
 }

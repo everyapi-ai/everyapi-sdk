@@ -7,6 +7,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -15,16 +16,16 @@ import (
 // "online" / "disabled"); the dashboard and CLI both match on these
 // strings, so renaming on the backend would break tooling.
 type EdgeNode struct {
-	ID         int       `json:"id"`
-	Name       string    `json:"name"`
-	Status     string    `json:"status"`
-	ChannelID  *int      `json:"channel_id"`
-	Paused     bool      `json:"paused"`
-	Hardware   *EdgeHW   `json:"hardware,omitempty"`
-	Location   *EdgeLoc  `json:"location,omitempty"`
-	Models     []string  `json:"models,omitempty"`
-	AgentVer   string    `json:"agent_version,omitempty"`
-	LastSeenAt int64     `json:"last_seen_at"`
+	ID         int      `json:"id"`
+	Name       string   `json:"name"`
+	Status     string   `json:"status"`
+	ChannelID  *int     `json:"channel_id"`
+	Paused     bool     `json:"paused"`
+	Hardware   *EdgeHW  `json:"hardware,omitempty"`
+	Location   *EdgeLoc `json:"location,omitempty"`
+	Models     []string `json:"models,omitempty"`
+	AgentVer   string   `json:"agent_version,omitempty"`
+	LastSeenAt int64    `json:"last_seen_at"`
 }
 
 // EdgeHW + EdgeLoc are the agent-written / supplier-declared metadata.
@@ -76,7 +77,7 @@ func (c *Client) CreateEdgeNode(ctx context.Context, req EdgeNodeCreate) (*EdgeN
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("create edge node: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return &env.Data, nil
 }
@@ -96,7 +97,7 @@ func (c *Client) ListEdgeNodes(ctx context.Context) ([]EdgeNode, error) {
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("list edge nodes: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return env.Data.Items, nil
 }
@@ -132,7 +133,7 @@ func (c *Client) DeleteEdgeNode(ctx context.Context, id int) error {
 		return err
 	}
 	if !env.Success {
-		return fmt.Errorf("delete edge node: %s", env.Message)
+		return errors.New(env.Message)
 	}
 	return nil
 }
@@ -154,7 +155,7 @@ func (c *Client) SetEdgeNodeStatus(ctx context.Context, id int, status string) e
 		return err
 	}
 	if !env.Success {
-		return fmt.Errorf("set edge node status: %s", env.Message)
+		return errors.New(env.Message)
 	}
 	return nil
 }

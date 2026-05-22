@@ -69,4 +69,3 @@ func TestCreateJumpSession_PropagatesUnauthorized(t *testing.T) {
 		t.Errorf("want IsUnauthorized=true, got %v", err)
 	}
 }
-

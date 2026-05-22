@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -52,7 +53,7 @@ func (c *Client) ListTokens(ctx context.Context) ([]TokenSummary, error) {
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("list tokens: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return env.Data.Items, nil
 }
@@ -130,7 +131,7 @@ func (c *Client) GetToken(ctx context.Context, id int) (*Token, error) {
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("get token: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return &env.Data, nil
 }
@@ -148,7 +149,7 @@ func (c *Client) CreateToken(ctx context.Context, req TokenCreate) error {
 		return err
 	}
 	if !env.Success {
-		return fmt.Errorf("create token: %s", env.Message)
+		return errors.New(env.Message)
 	}
 	return nil
 }
@@ -167,7 +168,7 @@ func (c *Client) UpdateToken(ctx context.Context, req TokenUpdate) (*Token, erro
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("update token: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return &env.Data, nil
 }
@@ -187,7 +188,7 @@ func (c *Client) SetTokenStatus(ctx context.Context, id, status int) (*Token, er
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("set token status: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return &env.Data, nil
 }
@@ -202,7 +203,7 @@ func (c *Client) DeleteToken(ctx context.Context, id int) error {
 		return err
 	}
 	if !env.Success {
-		return fmt.Errorf("delete token: %s", env.Message)
+		return errors.New(env.Message)
 	}
 	return nil
 }
@@ -226,7 +227,7 @@ func (c *Client) DeleteTokens(ctx context.Context, ids []int) (int, error) {
 		return 0, err
 	}
 	if !env.Success {
-		return 0, fmt.Errorf("delete tokens: %s", env.Message)
+		return 0, errors.New(env.Message)
 	}
 	return env.Data, nil
 }
@@ -246,7 +247,7 @@ func (c *Client) TokenKey(ctx context.Context, id int) (string, error) {
 		return "", err
 	}
 	if !env.Success || env.Data.Key == "" {
-		return "", fmt.Errorf("get token key: %s", env.Message)
+		return "", errors.New(env.Message)
 	}
 	return env.Data.Key, nil
 }

@@ -2,7 +2,7 @@ package api
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"net/url"
 )
 
@@ -65,7 +65,7 @@ func (c *Client) GetCheckinStatus(ctx context.Context, month string) (*CheckinSt
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("checkin status: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return &env.Data, nil
 }
@@ -83,7 +83,7 @@ func (c *Client) DoCheckin(ctx context.Context) (*CheckinResult, error) {
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("checkin: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return &env.Data, nil
 }

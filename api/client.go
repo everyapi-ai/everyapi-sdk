@@ -17,6 +17,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/cookiejar"
+	"os"
 	"strconv"
 	"time"
 )
@@ -123,6 +124,18 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	// "0".
 	if c.userID > 0 {
 		req.Header.Set("EveryAPI-User-Id", strconv.Itoa(c.userID))
+	}
+	// Backend's i18n middleware (backend/internal/i18n) reads
+	// Accept-Language and routes error messages to the matching
+	// translation table. We source the value from EVERYAPI_LANG —
+	// CLI's main() sets it once from settings.json on startup so
+	// every SDK call here picks it up without each command's
+	// newClient() helper having to call WithLanguage. Backend
+	// understands "en" and "zh" (prefix match — zh-CN / zh-TW
+	// route to zh). Empty env → no header → backend default
+	// (typically en).
+	if lang := os.Getenv("EVERYAPI_LANG"); lang != "" {
+		req.Header.Set("Accept-Language", lang)
 	}
 	resp, err := c.hc.Do(req)
 	if err != nil {

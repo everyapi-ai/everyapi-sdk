@@ -11,7 +11,7 @@ package api
 
 import (
 	"context"
-	"fmt"
+	"errors"
 )
 
 // JumpSessionResult is the start-side payload. VerificationPhrase
@@ -46,7 +46,7 @@ func (c *Client) CreateJumpSession(ctx context.Context) (*JumpSessionResult, err
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("create jump session: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return &JumpSessionResult{
 		SessionID:          env.Data.SessionID,

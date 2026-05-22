@@ -6,6 +6,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -51,7 +52,7 @@ func (c *Client) ListSellerChannels(ctx context.Context) ([]SellerChannel, error
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("list seller channels: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return env.Data.Items, nil
 }
@@ -78,7 +79,7 @@ func (c *Client) TransferSellerQuota(ctx context.Context, quota int) error {
 		return err
 	}
 	if !env.Success {
-		return fmt.Errorf("transfer seller quota: %s", env.Message)
+		return errors.New(env.Message)
 	}
 	return nil
 }
@@ -115,7 +116,7 @@ func (c *Client) GetSellerEligibility(ctx context.Context) (*SellerEligibility, 
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("get seller eligibility: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return &env.Data, nil
 }
@@ -165,7 +166,7 @@ func (c *Client) CreateSellerChannel(ctx context.Context, req SellerChannelCreat
 		return 0, err
 	}
 	if !env.Success {
-		return 0, fmt.Errorf("create seller channel: %s", env.Message)
+		return 0, errors.New(env.Message)
 	}
 	return env.Data.ID, nil
 }

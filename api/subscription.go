@@ -2,7 +2,7 @@ package api
 
 import (
 	"context"
-	"fmt"
+	"errors"
 )
 
 // SubscriptionPlan is the buyer-visible subset of
@@ -34,13 +34,13 @@ type SubscriptionPlanDTO struct {
 // faster than the CLI's release cycle, surfacing as strings keeps
 // the SDK forward-compatible.
 type SubscriptionSummary struct {
-	ID         int    `json:"id"`
-	PlanID     int    `json:"plan_id"`
-	PlanTitle  string `json:"plan_title"`
-	Source     string `json:"source"`
-	Status     string `json:"status"`
-	StartAt    int64  `json:"start_at"`
-	ExpiresAt  int64  `json:"expires_at"`
+	ID        int    `json:"id"`
+	PlanID    int    `json:"plan_id"`
+	PlanTitle string `json:"plan_title"`
+	Source    string `json:"source"`
+	Status    string `json:"status"`
+	StartAt   int64  `json:"start_at"`
+	ExpiresAt int64  `json:"expires_at"`
 }
 
 // SubscriptionSelf wraps the GetSubscriptionSelf payload. Active vs
@@ -64,7 +64,7 @@ func (c *Client) GetSubscriptionPlans(ctx context.Context) ([]SubscriptionPlan, 
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("subscription plans: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	out := make([]SubscriptionPlan, 0, len(env.Data))
 	for _, p := range env.Data {
@@ -84,7 +84,7 @@ func (c *Client) GetSubscriptionSelf(ctx context.Context) (*SubscriptionSelf, er
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("subscription self: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return &env.Data, nil
 }
@@ -104,7 +104,7 @@ func (c *Client) UpdateSubscriptionPreference(ctx context.Context, preference st
 		return err
 	}
 	if !env.Success {
-		return fmt.Errorf("subscription preference: %s", env.Message)
+		return errors.New(env.Message)
 	}
 	return nil
 }

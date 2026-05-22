@@ -17,7 +17,7 @@ package api
 
 import (
 	"context"
-	"fmt"
+	"errors"
 )
 
 // StartSellerClaudeOAuth kicks off an OAuth authorization flow. The
@@ -36,7 +36,7 @@ func (c *Client) StartSellerClaudeOAuth(ctx context.Context, name, models string
 		return "", err
 	}
 	if !env.Success {
-		return "", fmt.Errorf("start claude oauth: %s", env.Message)
+		return "", errors.New(env.Message)
 	}
 	return env.Data.AuthorizeURL, nil
 }
@@ -71,7 +71,7 @@ func (c *Client) CompleteSellerClaudeOAuth(ctx context.Context, input string) (*
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("complete claude oauth: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return &SellerClaudeOAuthResult{
 		ChannelID:   env.Data.Channel.ID,

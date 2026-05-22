@@ -7,6 +7,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -14,9 +15,9 @@ import (
 
 // Channel status constants. Mirrors backend common.ChannelStatus*.
 const (
-	ChannelStatusEnabled            = 1
-	ChannelStatusManuallyDisabled   = 2
-	ChannelStatusAutoDisabled       = 3
+	ChannelStatusEnabled          = 1
+	ChannelStatusManuallyDisabled = 2
+	ChannelStatusAutoDisabled     = 3
 )
 
 // SellerChannelUpdate is the PUT /api/seller/channel/:id payload.
@@ -52,7 +53,7 @@ func (c *Client) UpdateSellerChannel(ctx context.Context, id int, req SellerChan
 		return err
 	}
 	if !env.Success {
-		return fmt.Errorf("update seller channel: %s", env.Message)
+		return errors.New(env.Message)
 	}
 	return nil
 }
@@ -72,7 +73,7 @@ func (c *Client) DeleteSellerChannel(ctx context.Context, id int) error {
 		return err
 	}
 	if !env.Success {
-		return fmt.Errorf("delete seller channel: %s", env.Message)
+		return errors.New(env.Message)
 	}
 	return nil
 }
@@ -114,7 +115,7 @@ func (c *Client) RefreshChannelCredential(ctx context.Context, channelID int, ki
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("refresh credential: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return &env.Data, nil
 }
@@ -160,7 +161,7 @@ func (c *Client) SubmitCompensationClaim(ctx context.Context, req CompensationCl
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("submit compensation claim: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return &env.Data, nil
 }
@@ -195,7 +196,7 @@ func (c *Client) ListCompensationClaims(ctx context.Context, status string, page
 		return nil, 0, err
 	}
 	if !env.Success {
-		return nil, 0, fmt.Errorf("list compensation claims: %s", env.Message)
+		return nil, 0, errors.New(env.Message)
 	}
 	return env.Data.Items, env.Data.Total, nil
 }
@@ -241,7 +242,7 @@ func (c *Client) GetSellerSales(ctx context.Context, page, pageSize int) ([]Sell
 		return nil, 0, err
 	}
 	if !env.Success {
-		return nil, 0, fmt.Errorf("seller sales: %s", env.Message)
+		return nil, 0, errors.New(env.Message)
 	}
 	return env.Data.Items, env.Data.Total, nil
 }

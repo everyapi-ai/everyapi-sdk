@@ -127,7 +127,7 @@ func (c *Client) SellerCodexPoll(ctx context.Context, flowID string) (*SellerCod
 	case "denied":
 		out.State = SellerCodexPollDenied
 	default:
-		return nil, fmt.Errorf("seller codex poll: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return out, nil
 }

@@ -2,7 +2,7 @@ package api
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"net/url"
 	"strconv"
 )
@@ -164,7 +164,7 @@ func (c *Client) ListUserLogs(ctx context.Context, f LogFilter) ([]LogEntry, int
 		return nil, 0, err
 	}
 	if !env.Success {
-		return nil, 0, fmt.Errorf("list logs: %s", env.Message)
+		return nil, 0, errors.New(env.Message)
 	}
 	return env.Data.Items, env.Data.Total, nil
 }
@@ -183,7 +183,7 @@ func (c *Client) SelfLogStat(ctx context.Context, f LogFilter) (*LogStat, error)
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("log stat: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return &env.Data, nil
 }
@@ -212,7 +212,7 @@ func (c *Client) UserLogModelSummary(ctx context.Context, start, end int64) ([]M
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("log summary: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return env.Data, nil
 }
@@ -240,7 +240,7 @@ func (c *Client) UserQuotaDates(ctx context.Context, start, end int64) ([]QuotaD
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("quota dates: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return env.Data, nil
 }
@@ -258,7 +258,7 @@ func (c *Client) UserModels(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("user models: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	out := env.Data[:0]
 	for _, m := range env.Data {
@@ -282,7 +282,7 @@ func (c *Client) UserGroups(ctx context.Context) (map[string]GroupInfo, error) {
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("user groups: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return env.Data, nil
 }

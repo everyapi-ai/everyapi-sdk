@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -95,7 +96,7 @@ func (c *Client) demandList(ctx context.Context, path string) ([]Demand, int, er
 		return nil, 0, err
 	}
 	if !env.Success {
-		return nil, 0, fmt.Errorf("list demands: %s", env.Message)
+		return nil, 0, errors.New(env.Message)
 	}
 	return env.Data.Items, env.Data.Total, nil
 }
@@ -114,7 +115,7 @@ func (c *Client) GetDemand(ctx context.Context, id int) (*Demand, error) {
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("get demand: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return &env.Data, nil
 }
@@ -130,7 +131,7 @@ func (c *Client) SubmitDemand(ctx context.Context, req DemandSubmit) (*Demand, e
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("submit demand: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return &env.Data, nil
 }
@@ -148,7 +149,7 @@ func (c *Client) CancelDemand(ctx context.Context, id int) error {
 		return err
 	}
 	if !env.Success {
-		return fmt.Errorf("cancel demand: %s", env.Message)
+		return errors.New(env.Message)
 	}
 	return nil
 }
@@ -166,7 +167,7 @@ func (c *Client) DeleteDemand(ctx context.Context, id int) error {
 		return err
 	}
 	if !env.Success {
-		return fmt.Errorf("delete demand: %s", env.Message)
+		return errors.New(env.Message)
 	}
 	return nil
 }
@@ -210,7 +211,7 @@ func (c *Client) SubmitDispute(ctx context.Context, req DisputeSubmit) (*Dispute
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("submit dispute: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return &env.Data, nil
 }
@@ -235,7 +236,7 @@ func (c *Client) ListMyDisputes(ctx context.Context, page, pageSize int) ([]Disp
 		return nil, 0, err
 	}
 	if !env.Success {
-		return nil, 0, fmt.Errorf("list disputes: %s", env.Message)
+		return nil, 0, errors.New(env.Message)
 	}
 	return env.Data.Items, env.Data.Total, nil
 }
@@ -254,7 +255,7 @@ func (c *Client) GetDispute(ctx context.Context, id int) (*Dispute, error) {
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("get dispute: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return &env.Data, nil
 }
@@ -283,7 +284,7 @@ func (c *Client) SubmitAbuseReport(ctx context.Context, req AbuseReportSubmit) e
 		return err
 	}
 	if !env.Success {
-		return fmt.Errorf("submit abuse report: %s", env.Message)
+		return errors.New(env.Message)
 	}
 	return nil
 }

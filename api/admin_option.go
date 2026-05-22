@@ -14,6 +14,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -38,7 +39,7 @@ func (c *Client) ListOptions(ctx context.Context) ([]Option, error) {
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("list options: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return env.Data, nil
 }

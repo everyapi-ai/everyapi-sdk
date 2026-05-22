@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -53,7 +54,7 @@ func (c *Client) ListNotifications(ctx context.Context, unreadOnly bool, page, p
 		return nil, 0, err
 	}
 	if !env.Success {
-		return nil, 0, fmt.Errorf("list notifications: %s", env.Message)
+		return nil, 0, errors.New(env.Message)
 	}
 	return env.Data.Items, env.Data.Total, nil
 }
@@ -71,7 +72,7 @@ func (c *Client) NotificationUnreadCount(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	if !env.Success {
-		return 0, fmt.Errorf("unread count: %s", env.Message)
+		return 0, errors.New(env.Message)
 	}
 	return env.Data.Unread, nil
 }
@@ -89,7 +90,7 @@ func (c *Client) MarkNotificationRead(ctx context.Context, id int) error {
 		return err
 	}
 	if !env.Success {
-		return fmt.Errorf("mark read: %s", env.Message)
+		return errors.New(env.Message)
 	}
 	return nil
 }
@@ -109,7 +110,7 @@ func (c *Client) MarkAllNotificationsRead(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	if !env.Success {
-		return 0, fmt.Errorf("mark all read: %s", env.Message)
+		return 0, errors.New(env.Message)
 	}
 	return env.Data.Flipped, nil
 }
@@ -135,12 +136,12 @@ type DMThread struct {
 
 // DMMessage is one message in a thread.
 type DMMessage struct {
-	ID         int    `json:"id"`
-	ThreadID   int    `json:"thread_id"`
-	SenderID   int    `json:"sender_id"`
-	Body       string `json:"body"`
-	CreatedAt  int64  `json:"created_at"`
-	ReadAt     int64  `json:"read_at"`
+	ID        int    `json:"id"`
+	ThreadID  int    `json:"thread_id"`
+	SenderID  int    `json:"sender_id"`
+	Body      string `json:"body"`
+	CreatedAt int64  `json:"created_at"`
+	ReadAt    int64  `json:"read_at"`
 }
 
 // DMUnreadCount is the scalar from /api/dm/unread-count.
@@ -156,7 +157,7 @@ func (c *Client) DMUnreadCount(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	if !env.Success {
-		return 0, fmt.Errorf("dm unread count: %s", env.Message)
+		return 0, errors.New(env.Message)
 	}
 	return env.Data.Unread, nil
 }
@@ -172,7 +173,7 @@ func (c *Client) ListDMContacts(ctx context.Context) ([]DMContact, error) {
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("list contacts: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return env.Data, nil
 }
@@ -202,7 +203,7 @@ func (c *Client) ListDMThreads(ctx context.Context, page, pageSize int) ([]DMThr
 		return nil, 0, err
 	}
 	if !env.Success {
-		return nil, 0, fmt.Errorf("list threads: %s", env.Message)
+		return nil, 0, errors.New(env.Message)
 	}
 	return env.Data.Items, env.Data.Total, nil
 }
@@ -225,7 +226,7 @@ func (c *Client) OpenDMThread(ctx context.Context, otherUserID int) (*DMThread, 
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("open thread: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return &env.Data, nil
 }
@@ -256,7 +257,7 @@ func (c *Client) ListDMMessages(ctx context.Context, threadID, after, limit int)
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("list messages: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return env.Data, nil
 }
@@ -281,7 +282,7 @@ func (c *Client) SendDMMessage(ctx context.Context, threadID int, body string) (
 		return nil, err
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("send: %s", env.Message)
+		return nil, errors.New(env.Message)
 	}
 	return &env.Data, nil
 }
@@ -300,7 +301,7 @@ func (c *Client) MarkDMRead(ctx context.Context, threadID int) error {
 		return err
 	}
 	if !env.Success {
-		return fmt.Errorf("mark read: %s", env.Message)
+		return errors.New(env.Message)
 	}
 	return nil
 }

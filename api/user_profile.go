@@ -241,6 +241,28 @@ func (c *Client) ResetAffCode(ctx context.Context) (string, error) {
 	return env.Data, nil
 }
 
+// TransferAffQuota moves `quota` units from the affiliate-reward balance
+// into the caller's main Quota (POST /api/user/aff_transfer) — the
+// affiliate-side mirror of TransferSellerQuota. A backend-formatted 4xx
+// (insufficient affiliate balance, etc.) surfaces via the *APIError path.
+func (c *Client) TransferAffQuota(ctx context.Context, quota int) error {
+	if quota <= 0 {
+		return fmt.Errorf("quota must be positive, got %d", quota)
+	}
+	body := map[string]int{"quota": quota}
+	var env struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	}
+	if err := c.do(ctx, "POST", "/api/user/aff_transfer", body, &env); err != nil {
+		return err
+	}
+	if !env.Success {
+		return errors.New(env.Message)
+	}
+	return nil
+}
+
 // UpdateProfileRequest carries the fields PUT /api/user/self honors in
 // its generic-update branch (username / display_name / password). Empty
 // fields are omitted so a partial update preserves the rest. Changing

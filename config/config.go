@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // DefaultAPIBase is the production gateway. Hardcoded — no env-var
@@ -23,6 +24,22 @@ import (
 // explicit `--api-base` flag on `everyapi login` — opt-in, not
 // ambient.
 const DefaultAPIBase = "https://api.everyapi.ai"
+
+// ResolveAPIBase picks the gateway base URL for a command: an explicit
+// override (e.g. a --base flag) wins, else the logged-in gateway from
+// credentials.json, else the public default. The trailing slash is
+// trimmed so callers can append "/api/..." without producing "//".
+func ResolveAPIBase(override string) string {
+	base := override
+	if base == "" {
+		if c, err := Load(); err == nil && c.APIBase != "" {
+			base = c.APIBase
+		} else {
+			base = DefaultAPIBase
+		}
+	}
+	return strings.TrimRight(base, "/")
+}
 
 // Credentials is the on-disk credentials payload. JSON tags match the
 // file format. Stored mode 0600.

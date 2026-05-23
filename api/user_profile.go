@@ -86,6 +86,58 @@ func (c *Client) RegenerateBackupCodes(ctx context.Context, code string) ([]stri
 	return env.Data.BackupCodes, nil
 }
 
+// Setup2FAResult is the POST /api/user/2fa/setup payload: a fresh
+// TOTP secret, the otpauth:// provisioning URI (render as a QR or
+// type the secret into an authenticator), and one-time backup codes.
+// Setup persists a DISABLED 2FA row — call Enable2FA with a TOTP code
+// to turn it on. Backup codes are returned in cleartext only here.
+type Setup2FAResult struct {
+	Secret      string   `json:"secret"`
+	QRCodeData  string   `json:"qr_code_data"`
+	BackupCodes []string `json:"backup_codes"`
+}
+
+// Setup2FA begins 2FA enrollment (POST /api/user/2fa/setup). Fails
+// with success:false if 2FA is already enabled. Pair with Enable2FA.
+func (c *Client) Setup2FA(ctx context.Context) (*Setup2FAResult, error) {
+	var env struct {
+		Success bool           `json:"success"`
+		Message string         `json:"message"`
+		Data    Setup2FAResult `json:"data"`
+	}
+	if err := c.do(ctx, "POST", "/api/user/2fa/setup", nil, &env); err != nil {
+		return nil, err
+	}
+	if !env.Success {
+		return nil, errors.New(env.Message)
+	}
+	return &env.Data, nil
+}
+
+// Enable2FA finishes enrollment with the 6-digit TOTP code from the
+// authenticator (POST /api/user/2fa/enable). The secret was already
+// persisted by Setup2FA, so only the code is sent. Backup codes are
+// NOT accepted here.
+func (c *Client) Enable2FA(ctx context.Context, code string) error {
+	if code == "" {
+		return fmt.Errorf("enable 2fa: empty code")
+	}
+	var env struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	}
+	body := struct {
+		Code string `json:"code"`
+	}{Code: code}
+	if err := c.do(ctx, "POST", "/api/user/2fa/enable", body, &env); err != nil {
+		return err
+	}
+	if !env.Success {
+		return errors.New(env.Message)
+	}
+	return nil
+}
+
 // PasskeyStatus is the {enabled, last_used_at} payload PasskeyStatus
 // emits when a passkey is registered; last_used_at is zero when not.
 type PasskeyStatus struct {
@@ -187,4 +239,38 @@ func (c *Client) ResetAffCode(ctx context.Context) (string, error) {
 		return "", errors.New(env.Message)
 	}
 	return env.Data, nil
+}
+
+// UpdateProfileRequest carries the fields PUT /api/user/self honors in
+// its generic-update branch (username / display_name / password). Empty
+// fields are omitted so a partial update preserves the rest. Changing
+// the password requires OriginalPassword — the backend verifies it
+// against the stored hash and rejects a mismatch. Do NOT set the
+// setting-only keys (sidebar_modules / language / seller_mode_on /
+// marketplace_opt_in) here: PUT /api/user/self dispatches on the first
+// matching key, so any of those would short-circuit before the profile
+// branch ever runs.
+type UpdateProfileRequest struct {
+	Username         string `json:"username,omitempty"`
+	DisplayName      string `json:"display_name,omitempty"`
+	Password         string `json:"password,omitempty"`
+	OriginalPassword string `json:"original_password,omitempty"`
+}
+
+// UpdateProfile issues PUT /api/user/self for the generic profile
+// branch. The user can only ever update themselves — the backend forces
+// the id from the session and ignores quota/role/group/email in the
+// body.
+func (c *Client) UpdateProfile(ctx context.Context, req UpdateProfileRequest) error {
+	var env struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	}
+	if err := c.do(ctx, "PUT", "/api/user/self", req, &env); err != nil {
+		return err
+	}
+	if !env.Success {
+		return errors.New(env.Message)
+	}
+	return nil
 }

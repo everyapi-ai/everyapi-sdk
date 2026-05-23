@@ -25,6 +25,11 @@ type SelfData struct {
 	// credentials.json so help-text rendering can hide admin-gated
 	// subcommands without a per-help-render network round-trip.
 	Role int `json:"role"`
+	// Setting is the raw user-setting JSON blob (notify channel +
+	// quota-warning threshold + UI prefs). Left as a string to keep
+	// SelfData decoupled from the full setting schema; GetNotifySetting
+	// parses out the notification subset on demand.
+	Setting string `json:"setting"`
 }
 
 func (c *Client) GetSelf(ctx context.Context) (*SelfData, error) {

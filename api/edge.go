@@ -29,17 +29,29 @@ type EdgeNode struct {
 }
 
 // EdgeHW + EdgeLoc are the agent-written / supplier-declared metadata.
-// Kept loose (just the fields the CLI needs to render) — the backend
-// pkg/edge.Hardware / pkg/edge.Location can grow without breaking us.
+//
+// JSON tags MUST match backend/pkg/edge.{Hardware,Location} exactly.
+// The backend's Location is shared between the HTTP DTO and the WS
+// protocol the agent uses, so a tag rename here without a coordinated
+// backend change will silently drop fields on the wire. Same applies
+// to Hardware: missing fields here decode to zero values silently,
+// and the CLI / MCP renderers can't surface what they didn't decode.
 type EdgeHW struct {
-	GPUModel string `json:"gpu_model,omitempty"`
-	VRAMGB   int    `json:"vram_gb,omitempty"`
-	GPUCount int    `json:"gpu_count,omitempty"`
+	GPUModel    string `json:"gpu_model,omitempty"`
+	GPUCount    int    `json:"gpu_count,omitempty"`
+	VRAMTotalGB int    `json:"vram_total_gb,omitempty"`
+	CUDAVersion string `json:"cuda_version,omitempty"`
+	Driver      string `json:"driver,omitempty"`
+	CPUModel    string `json:"cpu_model,omitempty"`
+	RAMTotalGB  int    `json:"ram_total_gb,omitempty"`
+	Platform    string `json:"platform,omitempty"`
 }
 
 type EdgeLoc struct {
-	Country string `json:"country,omitempty"`
-	Region  string `json:"region,omitempty"`
+	CountryISO2 string  `json:"country_iso2,omitempty"`
+	Region      string  `json:"region,omitempty"`
+	Latitude    float64 `json:"latitude,omitempty"`
+	Longitude   float64 `json:"longitude,omitempty"`
 }
 
 // EdgeNodeCreate is the request body for POST /api/seller/edge/nodes.
@@ -138,19 +150,35 @@ func (c *Client) DeleteEdgeNode(ctx context.Context, id int) error {
 	return nil
 }
 
+// EdgeNodeAction is the closed enum the backend accepts on PATCH
+// /api/seller/edge/nodes/:id/status. Exposed as named constants so
+// callers can't accidentally pass "enabled" / "paused" / "stop" — the
+// backend would silently reject those with "edge.invalid_action".
+type EdgeNodeAction string
+
+const (
+	// EdgeNodeActionDisable flips the paired Channel to ManualDisabled
+	// (sticky; the watchdog won't auto-resume it on the next heartbeat).
+	EdgeNodeActionDisable EdgeNodeAction = "disable"
+	// EdgeNodeActionEnable restores the paired Channel — sets it to
+	// Enabled if the agent currently has a live session, else
+	// AutoDisabled so the next reconnect's flip kicks it back on.
+	EdgeNodeActionEnable EdgeNodeAction = "enable"
+)
+
 // SetEdgeNodeStatus wraps PATCH /api/seller/edge/nodes/:id/status.
-// Server accepts "enabled" / "paused" — pausing flips the paired
-// Channel to ManualDisabled (sticky; the auto-disable watchdog won't
-// touch it), enabling flips it back to AutoDisabled and the next agent
-// heartbeat picks the row up to Enabled.
-func (c *Client) SetEdgeNodeStatus(ctx context.Context, id int, status string) error {
+// `action` MUST be one of EdgeNodeActionEnable / EdgeNodeActionDisable.
+// Body shape and accepted values are dictated by backend
+// controller.SetEdgeNodeStatus (edgeNodeStatusRequest{Action}); the
+// SDK is the consumer, not the source of truth.
+func (c *Client) SetEdgeNodeStatus(ctx context.Context, id int, action EdgeNodeAction) error {
 	var env struct {
 		Success bool   `json:"success"`
 		Message string `json:"message"`
 	}
 	req := struct {
-		Status string `json:"status"`
-	}{Status: status}
+		Action EdgeNodeAction `json:"action"`
+	}{Action: action}
 	if err := c.do(ctx, "PATCH", fmt.Sprintf("/api/seller/edge/nodes/%d/status", id), req, &env); err != nil {
 		return err
 	}

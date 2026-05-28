@@ -132,6 +132,36 @@ func (c *Client) GetEdgeNode(ctx context.Context, id int) (*EdgeNode, error) {
 	return nil, fmt.Errorf("edge node %d not found", id)
 }
 
+// EdgeNodeUpdate is the request body for PUT /api/seller/edge/nodes/:id.
+// Name and Location are the only fields a seller may change here —
+// hardware / models / agent_version are agent-reported and would be
+// overwritten on the next reconnect, so the backend doesn't accept
+// them in this payload. An empty Name leaves the existing name
+// untouched, matching the backend's
+// strings.TrimSpace+early-return behavior in UpdateEdgeNode.
+type EdgeNodeUpdate struct {
+	Name     string   `json:"name,omitempty"`
+	Location *EdgeLoc `json:"location,omitempty"`
+}
+
+// UpdateEdgeNode wraps PUT /api/seller/edge/nodes/:id — the rename /
+// edit-location surface. The backend also syncs the paired
+// Channel.Name in the same transaction so the relay router's listing
+// stays in lockstep with the dashboard's display.
+func (c *Client) UpdateEdgeNode(ctx context.Context, id int, req EdgeNodeUpdate) error {
+	var env struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	}
+	if err := c.do(ctx, "PUT", fmt.Sprintf("/api/seller/edge/nodes/%d", id), req, &env); err != nil {
+		return err
+	}
+	if !env.Success {
+		return errors.New(env.Message)
+	}
+	return nil
+}
+
 // DeleteEdgeNode wraps DELETE /api/seller/edge/nodes/:id. Cascade
 // behaviour (drops the paired Channel + abilities only when this is
 // the LAST node attached to that channel) is server-side; the CLI

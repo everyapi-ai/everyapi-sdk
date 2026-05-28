@@ -277,6 +277,54 @@ func TestDeleteEdgeNode(t *testing.T) {
 	}
 }
 
+func TestUpdateEdgeNode(t *testing.T) {
+	// Decode against the BACKEND-side wire format (the controller's
+	// edgeNodeUpdateRequest{Name, Location} in
+	// backend/internal/controller/edge_node.go) — decoding into the
+	// SDK's own EdgeNodeUpdate would round-trip cleanly even if a
+	// future SDK rename desynchronised the JSON tags, masking the
+	// drift this test is meant to catch.
+	var gotMethod, gotPath, gotName string
+	var gotLocCountry, gotLocRegion string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		var body struct {
+			Name     string `json:"name"`
+			Location *struct {
+				CountryISO2 string `json:"country_iso2"`
+				Region      string `json:"region"`
+			} `json:"location"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		gotName = body.Name
+		if body.Location != nil {
+			gotLocCountry = body.Location.CountryISO2
+			gotLocRegion = body.Location.Region
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": true})
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "sk-test")
+	err := c.UpdateEdgeNode(context.Background(), 42, EdgeNodeUpdate{
+		Name:     "renamed",
+		Location: &EdgeLoc{CountryISO2: "JP", Region: "tokyo"},
+	})
+	if err != nil {
+		t.Fatalf("UpdateEdgeNode: %v", err)
+	}
+	if gotMethod != "PUT" || gotPath != "/api/seller/edge/nodes/42" {
+		t.Fatalf("wrong req: %s %s", gotMethod, gotPath)
+	}
+	if gotName != "renamed" {
+		t.Fatalf("name not on wire: got %q", gotName)
+	}
+	if gotLocCountry != "JP" || gotLocRegion != "tokyo" {
+		t.Fatalf("location not on wire: country=%q region=%q", gotLocCountry, gotLocRegion)
+	}
+}
+
 func TestEdgeNodeErrorEnvelope(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{

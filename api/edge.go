@@ -15,17 +15,29 @@ import (
 // Status is the string form of pkg/edge.NodeStatus ("offline" /
 // "online" / "disabled"); the dashboard and CLI both match on these
 // strings, so renaming on the backend would break tooling.
+//
+// GPUUtilPct / VRAMUsedGB / ActiveRequests are live-telemetry pointers:
+// the backend (backend/internal/controller/edge_node.go::viewEdgeNode)
+// omits them when the node is offline or hasn't reported a heartbeat
+// yet — the dashboard treats nil as "no live data" rather than
+// surfacing 0 (a 0% util reading from an idle node IS meaningful,
+// so the missing-vs-zero distinction matters). CLI renderers should
+// gate display on the pointer being non-nil.
 type EdgeNode struct {
-	ID         int      `json:"id"`
-	Name       string   `json:"name"`
-	Status     string   `json:"status"`
-	ChannelID  *int     `json:"channel_id"`
-	Paused     bool     `json:"paused"`
-	Hardware   *EdgeHW  `json:"hardware,omitempty"`
-	Location   *EdgeLoc `json:"location,omitempty"`
-	Models     []string `json:"models,omitempty"`
-	AgentVer   string   `json:"agent_version,omitempty"`
-	LastSeenAt int64    `json:"last_seen_at"`
+	ID             int      `json:"id"`
+	Name           string   `json:"name"`
+	Status         string   `json:"status"`
+	ChannelID      *int     `json:"channel_id"`
+	Paused         bool     `json:"paused"`
+	Hardware       *EdgeHW  `json:"hardware,omitempty"`
+	Location       *EdgeLoc `json:"location,omitempty"`
+	Models         []string `json:"models,omitempty"`
+	AgentVer       string   `json:"agent_version,omitempty"`
+	LastSeenAt     int64    `json:"last_seen_at"`
+	CreatedAt      int64    `json:"created_at"`
+	GPUUtilPct     *int     `json:"gpu_util_pct,omitempty"`
+	VRAMUsedGB     *float64 `json:"vram_used_gb,omitempty"`
+	ActiveRequests *int     `json:"active_requests,omitempty"`
 }
 
 // EdgeHW + EdgeLoc are the agent-written / supplier-declared metadata.

@@ -169,6 +169,196 @@ func TestEdgeHWFullWireFormat(t *testing.T) {
 	}
 }
 
+// TestEdgeNodeTelemetryWireFormat pins the live-telemetry fields on
+// EdgeNode (gpu_util_pct / vram_used_gb / active_requests) plus
+// created_at — the backend's edgeNodeView surfaces them but the SDK
+// originally only decoded the static metadata. Same drift-guard
+// shape as TestEdgeHWFullWireFormat: replay a backend-shaped JSON
+// blob into ListEdgeNodes and assert every field round-trips with
+// the right TYPE (the omitempty pointers distinguish "not reported"
+// nil from a meaningful zero value).
+func TestEdgeNodeTelemetryWireFormat(t *testing.T) {
+	const nodeJSON = `{
+		"id":              1,
+		"name":            "n",
+		"status":          "online",
+		"channel_id":      null,
+		"paused":          false,
+		"last_seen_at":    1700000000,
+		"created_at":      1699000000,
+		"gpu_util_pct":    73,
+		"vram_used_gb":    18.5,
+		"active_requests": 4
+	}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		body := `{"success":true,"data":{"items":[` + nodeJSON + `]}}`
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	nodes, err := New(srv.URL, "sk-test").ListEdgeNodes(context.Background())
+	if err != nil {
+		t.Fatalf("ListEdgeNodes: %v", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected one node, got %d", len(nodes))
+	}
+	n := nodes[0]
+	if n.CreatedAt != 1699000000 {
+		t.Errorf("created_at dropped: %d", n.CreatedAt)
+	}
+	if n.GPUUtilPct == nil || *n.GPUUtilPct != 73 {
+		t.Errorf("gpu_util_pct dropped: got %+v", n.GPUUtilPct)
+	}
+	if n.VRAMUsedGB == nil || *n.VRAMUsedGB != 18.5 {
+		t.Errorf("vram_used_gb dropped: got %+v", n.VRAMUsedGB)
+	}
+	if n.ActiveRequests == nil || *n.ActiveRequests != 4 {
+		t.Errorf("active_requests dropped: got %+v", n.ActiveRequests)
+	}
+}
+
+// TestEdgeNodeTelemetryPartialReport pins the per-field decode shape:
+// the current backend (viewEdgeNode in edge_node.go) assigns all
+// three live fields together off the same heartbeat snapshot, so a
+// mixed-nil response can't happen today. But the CLI and MCP
+// renderers branch per-field on nil, on the (defensive) assumption
+// that a future backend split — e.g. active_requests becoming
+// optional or computed elsewhere — might emit only some of the
+// three. This test pins that behavior: when the backend reports
+// only gpu_util_pct, the SDK MUST leave the other two pointers nil
+// so renderers omit them cleanly rather than rendering 0.
+func TestEdgeNodeTelemetryPartialReport(t *testing.T) {
+	const nodeJSON = `{
+		"id":           3,
+		"name":         "partial-rig",
+		"status":       "online",
+		"channel_id":   null,
+		"paused":       false,
+		"last_seen_at": 1700000000,
+		"gpu_util_pct": 42
+	}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		body := `{"success":true,"data":{"items":[` + nodeJSON + `]}}`
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	nodes, err := New(srv.URL, "sk-test").ListEdgeNodes(context.Background())
+	if err != nil {
+		t.Fatalf("ListEdgeNodes: %v", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected one node, got %d", len(nodes))
+	}
+	n := nodes[0]
+	if n.GPUUtilPct == nil || *n.GPUUtilPct != 42 {
+		t.Errorf("gpu_util_pct must round-trip; got %+v", n.GPUUtilPct)
+	}
+	if n.VRAMUsedGB != nil {
+		t.Errorf("vram_used_gb must stay nil when backend omits it; got %g", *n.VRAMUsedGB)
+	}
+	if n.ActiveRequests != nil {
+		t.Errorf("active_requests must stay nil when backend omits it; got %d", *n.ActiveRequests)
+	}
+}
+
+// TestEdgeNodeTelemetryZeroValuesOnIdleNode is the missing-vs-zero
+// contract test the SDK doc and EDGE_NODE.md rest on. The backend
+// viewEdgeNode assigns the three live pointers inside its
+// `ReceivedAt > 0` branch unconditionally, so an idle but
+// online+heartbeating node emits e.g. `gpu_util_pct: 0` — the JSON
+// key is PRESENT with value 0, NOT omitted. The SDK must surface
+// `*GPUUtilPct == 0` (non-nil pointer to zero), distinct from the
+// offline case where the key is omitted entirely (nil pointer).
+// Without this, a CLI / dashboard rendering "GPU 0%" for a busy
+// node and "no live data" for an idle one would collapse into the
+// same nil branch and the seller would lose the distinction.
+func TestEdgeNodeTelemetryZeroValuesOnIdleNode(t *testing.T) {
+	const nodeJSON = `{
+		"id":              4,
+		"name":            "idle-rig",
+		"status":          "online",
+		"channel_id":      null,
+		"paused":          false,
+		"last_seen_at":    1700000000,
+		"gpu_util_pct":    0,
+		"vram_used_gb":    0.0,
+		"active_requests": 0
+	}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		body := `{"success":true,"data":{"items":[` + nodeJSON + `]}}`
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	nodes, err := New(srv.URL, "sk-test").ListEdgeNodes(context.Background())
+	if err != nil {
+		t.Fatalf("ListEdgeNodes: %v", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected one node, got %d", len(nodes))
+	}
+	n := nodes[0]
+	if n.GPUUtilPct == nil {
+		t.Fatal("gpu_util_pct=0 in JSON must NOT decode to nil pointer (would collapse with offline case)")
+	}
+	if *n.GPUUtilPct != 0 {
+		t.Errorf("gpu_util_pct: expected 0, got %d", *n.GPUUtilPct)
+	}
+	if n.VRAMUsedGB == nil {
+		t.Fatal("vram_used_gb=0 in JSON must NOT decode to nil pointer")
+	}
+	if *n.VRAMUsedGB != 0 {
+		t.Errorf("vram_used_gb: expected 0, got %g", *n.VRAMUsedGB)
+	}
+	if n.ActiveRequests == nil {
+		t.Fatal("active_requests=0 in JSON must NOT decode to nil pointer")
+	}
+	if *n.ActiveRequests != 0 {
+		t.Errorf("active_requests: expected 0, got %d", *n.ActiveRequests)
+	}
+}
+
+// TestEdgeNodeTelemetryNilOnOfflineNode pins the offline rendering
+// path: when the backend omits the telemetry fields (omitempty,
+// matches the "node is offline / no heartbeat yet" branch in
+// viewEdgeNode), the SDK pointers must remain nil so CLI / dashboard
+// renderers can distinguish "no live data" from "0% util".
+func TestEdgeNodeTelemetryNilOnOfflineNode(t *testing.T) {
+	const nodeJSON = `{
+		"id":           2,
+		"name":         "offline-rig",
+		"status":       "offline",
+		"channel_id":   null,
+		"paused":       false,
+		"last_seen_at": 0
+	}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		body := `{"success":true,"data":{"items":[` + nodeJSON + `]}}`
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	nodes, err := New(srv.URL, "sk-test").ListEdgeNodes(context.Background())
+	if err != nil {
+		t.Fatalf("ListEdgeNodes: %v", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected one node, got %d", len(nodes))
+	}
+	n := nodes[0]
+	if n.GPUUtilPct != nil {
+		t.Errorf("gpu_util_pct must be nil for offline node; got %d", *n.GPUUtilPct)
+	}
+	if n.VRAMUsedGB != nil {
+		t.Errorf("vram_used_gb must be nil for offline node; got %g", *n.VRAMUsedGB)
+	}
+	if n.ActiveRequests != nil {
+		t.Errorf("active_requests must be nil for offline node; got %d", *n.ActiveRequests)
+	}
+}
+
 func TestListEdgeNodes(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{

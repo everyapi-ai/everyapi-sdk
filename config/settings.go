@@ -25,6 +25,13 @@ type Settings struct {
 	// match — zh-CN / zh-TW both route to zh). Empty = autodetect
 	// at runtime from $LANG / $LC_ALL.
 	Language string `json:"language,omitempty"`
+
+	// MenuLayout controls how the bare-`everyapi` launcher renders its
+	// command list. "grouped" (default, empty) shows every command on
+	// one screen under category headers; "nested" shows a category
+	// picker first, then the commands inside the chosen category.
+	// Unknown values fall back to grouped.
+	MenuLayout string `json:"menu_layout,omitempty"`
 }
 
 // settingsPath is the on-disk path. Same dir as credentialsPath

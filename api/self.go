@@ -84,3 +84,29 @@ func (c *Client) GetStatus(ctx context.Context) (*StatusData, error) {
 func (c *Client) ProbeRelayToken(ctx context.Context) error {
 	return c.do(ctx, "GET", "/v1/models", nil, nil)
 }
+
+// RelayModels lists the model ids the RELAY token can actually route
+// to, read from the same GET /v1/models endpoint ProbeRelayToken hits
+// (OpenAI-compatible `{ "data": [ { "id": ... } ] }`). Unlike
+// UserModels (GET /api/user/models, scoped to the management account),
+// this reflects the token's group binding — so a picker built on it
+// only offers models the launched tool will really reach. Build the
+// client with the relay key (no EveryAPI-User-Id), mirroring what a
+// relayed tool sends. Blank ids are filtered so callers needn't dedupe.
+func (c *Client) RelayModels(ctx context.Context) ([]string, error) {
+	var env struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := c.do(ctx, "GET", "/v1/models", nil, &env); err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(env.Data))
+	for _, m := range env.Data {
+		if m.ID != "" {
+			out = append(out, m.ID)
+		}
+	}
+	return out, nil
+}

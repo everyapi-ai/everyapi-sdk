@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"errors"
 )
 
 // SelfData is the subset of /api/user/self the CLI reads. The full
@@ -42,7 +41,11 @@ func (c *Client) GetSelf(ctx context.Context) (*SelfData, error) {
 		return nil, err
 	}
 	if !env.Success {
-		return nil, errors.New(env.Message)
+		// HTTP 200 + success:false — the legacy envelope rejection. For
+		// this authenticated endpoint that almost always means the token
+		// is invalid/expired (backend returns 200 here, not 401), so the
+		// typed error lets callers map it to "session expired".
+		return nil, &EnvelopeError{Message: env.Message}
 	}
 	return &env.Data, nil
 }
@@ -65,7 +68,7 @@ func (c *Client) GetStatus(ctx context.Context) (*StatusData, error) {
 		return nil, err
 	}
 	if !env.Success {
-		return nil, errors.New(env.Message)
+		return nil, &EnvelopeError{Message: env.Message}
 	}
 	return &env.Data, nil
 }

@@ -98,6 +98,20 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("everyapi api %d: %s", e.StatusCode, e.Body)
 }
 
+// EnvelopeError is returned when the backend replies HTTP 2xx but with
+// the standard { success:false, message } envelope. This is the legacy
+// one-api convention where many failures DON'T use a 4xx status — most
+// notably an invalid/expired access token on /api/user/self comes back
+// HTTP 200 + success:false (see backend middleware authHelper), so
+// APIError (built only for non-2xx) never sees it and IsUnauthorized
+// can't catch it. Distinct type so callers can tell "backend rejected
+// the request" from a transport/HTTP error and react in context — e.g.
+// an envelope rejection of the authenticated self endpoint means the
+// session is bad. Carries the backend's already-localized message.
+type EnvelopeError struct{ Message string }
+
+func (e *EnvelopeError) Error() string { return e.Message }
+
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
 	var reqBody io.Reader
 	if body != nil {
@@ -157,6 +171,21 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 			ae.Message = env.Message
 		}
 		return ae
+	}
+	// On 2xx the legacy envelope can still report failure. The backend
+	// tags an auth-class rejection (invalid/expired token) with
+	// code:"unauthorized" even though it returns HTTP 200 (see backend
+	// authHelper). Promote that to a 401-equivalent so IsUnauthorized
+	// catches it everywhere — no caller has to special-case the envelope.
+	// Non-auth envelope failures (business validation, also 200) carry no
+	// such code and are left for the caller's own success:false check.
+	var probe struct {
+		Success *bool  `json:"success"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(data, &probe) == nil && probe.Success != nil && !*probe.Success && probe.Code == "unauthorized" {
+		return &APIError{StatusCode: http.StatusUnauthorized, Message: probe.Message}
 	}
 	if out != nil {
 		if err := json.Unmarshal(data, out); err != nil {

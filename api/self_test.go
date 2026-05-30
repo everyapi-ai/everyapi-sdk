@@ -2,10 +2,74 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 )
+
+// GetSelf must distinguish the backend's two rejection shapes so callers
+// (cmd/status, doctor) can map a bad token to "session expired": an
+// invalid access token comes back HTTP 200 + {success:false} (legacy
+// one-api convention), which must surface as *EnvelopeError — NOT a
+// generic error and NOT an *APIError (that's reserved for non-2xx).
+func TestGetSelf_EnvelopeRejection(t *testing.T) {
+	t.Run("200 + success:false is an EnvelopeError", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			// HTTP 200 — the backend's authHelper returns this for an
+			// invalid access token, not a 401.
+			w.Write([]byte(`{"success":false,"message":"access token invalid"}`))
+		}))
+		defer srv.Close()
+		_, err := New(srv.URL, "dead").WithUserID(1).GetSelf(context.Background())
+		if err == nil {
+			t.Fatal("expected an error for success:false")
+		}
+		var envErr *EnvelopeError
+		if !errors.As(err, &envErr) {
+			t.Fatalf("err = %T (%v), want *EnvelopeError", err, err)
+		}
+		if envErr.Message != "access token invalid" {
+			t.Errorf("Message = %q, want %q", envErr.Message, "access token invalid")
+		}
+		// A 200-envelope rejection is NOT a transport 401.
+		if IsUnauthorized(err) {
+			t.Error("IsUnauthorized = true, want false for a 200 envelope rejection")
+		}
+	})
+
+	t.Run("200 + code:unauthorized is promoted to a 401", func(t *testing.T) {
+		// The backend tags an invalid/expired token this way (HTTP 200,
+		// kept for one-api/dashboard compat). c.do must promote it so
+		// IsUnauthorized catches it for EVERY endpoint, not just GetSelf.
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"success":false,"code":"unauthorized","message":"access token invalid"}`))
+		}))
+		defer srv.Close()
+		_, err := New(srv.URL, "dead").WithUserID(1).GetSelf(context.Background())
+		if !IsUnauthorized(err) {
+			t.Fatalf("IsUnauthorized = false, want true for code:unauthorized (err=%T %v)", err, err)
+		}
+	})
+
+	t.Run("non-2xx stays an APIError", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"success":false,"message":"nope"}`))
+		}))
+		defer srv.Close()
+		_, err := New(srv.URL, "dead").WithUserID(1).GetSelf(context.Background())
+		if !IsUnauthorized(err) {
+			t.Fatalf("IsUnauthorized = false, want true (err=%T %v)", err, err)
+		}
+		var envErr *EnvelopeError
+		if errors.As(err, &envErr) {
+			t.Error("a 401 must not be classified as *EnvelopeError")
+		}
+	})
+}
 
 // ProbeRelayToken must hit the relay auth path (GET /v1/models) and
 // translate the gateway's verdict into a plain error the caller can

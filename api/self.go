@@ -88,28 +88,64 @@ func (c *Client) ProbeRelayToken(ctx context.Context) error {
 	return c.do(ctx, "GET", "/v1/models", nil, nil)
 }
 
-// RelayModels lists the model ids the RELAY token can actually route
+// RelayModel describes one model the RELAY token can route to, as
+// reported by GET /v1/models: its id, the upstream channel that owns it
+// (the OpenAI-compatible `owned_by`, which the gateway fills with the
+// channel's adaptor name — "minimax", "deepseek", "moonshot",
+// "zhipu_4v", "ali", "byteplus", …), and the endpoint types it serves
+// (`anthropic`, `openai`, `image-generation`, `embeddings`, …). Owner +
+// endpoint types back the per-provider model pickers behind
+// `everyapi use <provider>`.
+type RelayModel struct {
+	ID                     string
+	OwnedBy                string
+	SupportedEndpointTypes []string
+}
+
+// RelayModelCatalog lists the models the RELAY token can actually route
 // to, read from the same GET /v1/models endpoint ProbeRelayToken hits
-// (OpenAI-compatible `{ "data": [ { "id": ... } ] }`). Unlike
-// UserModels (GET /api/user/models, scoped to the management account),
-// this reflects the token's group binding — so a picker built on it
-// only offers models the launched tool will really reach. Build the
-// client with the relay key (no EveryAPI-User-Id), mirroring what a
-// relayed tool sends. Blank ids are filtered so callers needn't dedupe.
-func (c *Client) RelayModels(ctx context.Context) ([]string, error) {
+// (OpenAI-compatible `{ "data": [ { "id", "owned_by",
+// "supported_endpoint_types" } ] }`). Unlike UserModels (GET
+// /api/user/models, scoped to the management account), this reflects the
+// token's group binding — so a picker built on it only offers models the
+// launched tool will really reach. Build the client with the relay key
+// (no EveryAPI-User-Id), mirroring what a relayed tool sends. Blank ids
+// are filtered so callers needn't dedupe.
+func (c *Client) RelayModelCatalog(ctx context.Context) ([]RelayModel, error) {
 	var env struct {
 		Data []struct {
-			ID string `json:"id"`
+			ID                     string   `json:"id"`
+			OwnedBy                string   `json:"owned_by"`
+			SupportedEndpointTypes []string `json:"supported_endpoint_types"`
 		} `json:"data"`
 	}
 	if err := c.do(ctx, "GET", "/v1/models", nil, &env); err != nil {
 		return nil, err
 	}
-	out := make([]string, 0, len(env.Data))
+	out := make([]RelayModel, 0, len(env.Data))
 	for _, m := range env.Data {
 		if m.ID != "" {
-			out = append(out, m.ID)
+			out = append(out, RelayModel{
+				ID:                     m.ID,
+				OwnedBy:                m.OwnedBy,
+				SupportedEndpointTypes: m.SupportedEndpointTypes,
+			})
 		}
+	}
+	return out, nil
+}
+
+// RelayModels is RelayModelCatalog projected to just the ids, backing
+// the `everyapi use hermes` picker (which lists every routable model,
+// not one provider's). Blank ids are already filtered by the catalog.
+func (c *Client) RelayModels(ctx context.Context) ([]string, error) {
+	catalog, err := c.RelayModelCatalog(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(catalog))
+	for _, m := range catalog {
+		out = append(out, m.ID)
 	}
 	return out, nil
 }

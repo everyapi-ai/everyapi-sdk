@@ -153,3 +153,34 @@ func TestRelayModels(t *testing.T) {
 		}
 	})
 }
+
+// RelayModelCatalog backs the `everyapi use <provider>` pickers: it must
+// carry each model's owned_by (provider attribution) and
+// supported_endpoint_types (so non-chat models can be filtered out),
+// while still dropping blank ids.
+func TestRelayModelCatalog(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"success":true,"object":"list","data":[` +
+			`{"id":"glm-5.1","owned_by":"zhipu_4v","supported_endpoint_types":["anthropic","openai"]},` +
+			`{"id":""},` +
+			`{"id":"image-01","owned_by":"minimax","supported_endpoint_types":["image-generation"]}]}`))
+	}))
+	defer srv.Close()
+	got, err := New(srv.URL, "relay-key").RelayModelCatalog(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d models, want 2 (blank id filtered): %+v", len(got), got)
+	}
+	if got[0].ID != "glm-5.1" || got[0].OwnedBy != "zhipu_4v" {
+		t.Errorf("model[0] = %+v, want id=glm-5.1 owned_by=zhipu_4v", got[0])
+	}
+	if len(got[0].SupportedEndpointTypes) != 2 || got[0].SupportedEndpointTypes[0] != "anthropic" {
+		t.Errorf("model[0] endpoints = %v, want [anthropic openai]", got[0].SupportedEndpointTypes)
+	}
+	if got[1].ID != "image-01" || got[1].OwnedBy != "minimax" {
+		t.Errorf("model[1] = %+v, want id=image-01 owned_by=minimax", got[1])
+	}
+}

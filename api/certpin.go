@@ -168,7 +168,7 @@ func (p *pinReporter) inspect(serverName string, leaf *x509.Certificate) error {
 
 // PinMismatchHook is an optional callback that fires once per
 // host+pin per process whenever the TLS pin mismatches. Useful for
-// the menubar, which has no stderr surface a user would ever read;
+// a GUI client, which has no stderr surface a user would ever read;
 // it can register a hook that pops a desktop notification. Nil =
 // no callback (the default — preserves the CLI's stderr-only
 // behaviour). Set before the first HTTP request.

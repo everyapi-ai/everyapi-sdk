@@ -1,5 +1,5 @@
 // CLI jump-session client — the anti-phishing handshake from
-// EVERYAPI §7-5 Layer 3. The CLI / menubar gets back a
+// EVERYAPI §7-5 Layer 3. The CLI gets back a
 // {session_id, phrase} pair, prints the phrase to the terminal,
 // asks the user to confirm, and only then opens the browser to a
 // URL it composes itself using its own knowledge of dashboard

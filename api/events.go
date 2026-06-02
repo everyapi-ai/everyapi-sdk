@@ -33,7 +33,7 @@ import (
 // Event is the wire shape of one SSE message. Type maps to the
 // `event:` line; Data is the raw JSON from the `data:` line and is
 // left undecoded so callers can unmarshal into their own typed
-// struct (the menubar only handles two types today; future event
+// struct (a GUI client only handles two types today; future event
 // types ship without changing this struct).
 type Event struct {
 	Type string          `json:"type"`
@@ -93,7 +93,7 @@ func (c *Client) SubscribeEvents(ctx context.Context, onTransportErr func(error)
 			// 401 from the SSE endpoint means the access token is no
 			// longer valid (revoked / expired). Don't reconnect
 			// forever — terminate the subscription and let the caller
-			// observe the closed channel. The menubar's onTransportErr
+			// observe the closed channel. The desktop client's onTransportErr
 			// callback inspects this via api.IsUnauthorized and
 			// triggers a sign-out.
 			if IsUnauthorized(err) {
@@ -108,7 +108,7 @@ func (c *Client) SubscribeEvents(ctx context.Context, onTransportErr func(error)
 			// A stream that stayed up longer than healthyStreamThreshold
 			// is a healthy disconnect, not a flap. Reset the backoff so
 			// the next reconnect doesn't wait the full 30s cap — without
-			// this, a long-lived menubar that's seen one disconnect per
+			// this, a long-lived desktop client that's seen one disconnect per
 			// hour ends up at the 30s cap permanently after ~7 hours.
 			if streamLasted > healthyStreamThreshold {
 				delay = reconnectInitialDelay
@@ -271,7 +271,7 @@ func parseSSE(ctx context.Context, body io.Reader, out chan<- Event) error {
 }
 
 // jitter returns d with up to 25% random additive jitter — enough to
-// desynchronise herds of menubar reconnects after a backend blip.
+// desynchronise herds of desktop-client reconnects after a backend blip.
 func jitter(d time.Duration) time.Duration {
 	if d <= 0 {
 		return 0

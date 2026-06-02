@@ -1,7 +1,7 @@
 # everyapi-sdk
 
 Shared Go SDK for the EveryAPI tool-chain. Provides the building blocks
-that the CLI (`clients/cli`), the menubar (`clients/menubar`), and any
+that the CLI (`clients/cli`), the edge agent (`clients/edge`), and any
 future EveryAPI surface (browser extension, mobile, …) consume in
 common:
 
@@ -10,7 +10,7 @@ common:
 | `api/` | HTTP client for the EveryAPI gateway — device-auth, jump-session, seller OAuth (Claude / Gemini / Codex), token list / key fetch, relay-key resolver, TLS public-key pinning |
 | `config/` | `~/.config/everyapi/credentials.json` read/write — atomic, mode 0600 |
 | `oauthloopback/` | One-shot HTTP listener on a random loopback port for OAuth code redirects |
-| `sanitizer/` | Local privacy-sanitizer proxy used by `everyapi proxy start` and the menubar's in-process sanitizer toggle |
+| `sanitizer/` | Local privacy-sanitizer proxy used by `everyapi proxy start` |
 
 ## Module path
 
@@ -31,8 +31,7 @@ follow standard Go semver.
 ## History
 
 Split out from `github.com/everyapi-ai/everyapi-ai` (the CLI module)
-when the menubar app shipped — three surfaces sharing one `internal/`
-made re-exporting and independent release impractical. See
-`docs/cli/` and `clients/menubar/GOAL.md` for the prior single-module
-rationale (the latter document moved with the menubar code in the
-`refactor/clients-monorepo` split).
+in the `refactor/clients-monorepo` split, when multiple surfaces
+sharing one `internal/` namespace made re-exporting and independent
+release impractical. See `docs/cli/` for the prior single-module
+rationale.

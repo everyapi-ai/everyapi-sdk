@@ -1,5 +1,5 @@
-// Shared relay-key resolution used by the CLI and the menubar.
-// Both surfaces need to map (creds, group) → "sk-everyapi-…" key
+// Shared relay-key resolution used by the CLI.
+// It maps (creds, group) → "sk-everyapi-…" key
 // with the same precedence rules:
 //
 //   - default group + cached key on creds → cache hit, no API call
@@ -12,9 +12,8 @@
 //     is deliberately skipped so the default-group lookup doesn't
 //     get poisoned.
 //
-// Originally lived twice in clients/cli (`cmd/relaykey.go` and
-// `internal/menubar/relaykey.go`); promoted here in R5 so behaviour
-// drift between the two surfaces is impossible.
+// Originally lived in clients/cli (`cmd/relaykey.go`); promoted
+// here in R5 so behaviour drift between surfaces is impossible.
 package api
 
 import (

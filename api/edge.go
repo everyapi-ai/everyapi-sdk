@@ -32,6 +32,7 @@ type EdgeNode struct {
 	Hardware       *EdgeHW  `json:"hardware,omitempty"`
 	Location       *EdgeLoc `json:"location,omitempty"`
 	Models         []string `json:"models,omitempty"`
+	Workloads      []string `json:"workloads,omitempty"`
 	AgentVer       string   `json:"agent_version,omitempty"`
 	LastSeenAt     int64    `json:"last_seen_at"`
 	CreatedAt      int64    `json:"created_at"`
@@ -74,6 +75,25 @@ type EdgeNodeCreate struct {
 	Name              string   `json:"name"`
 	Location          *EdgeLoc `json:"location,omitempty"`
 	AttachToChannelID *int     `json:"attach_to_channel_id,omitempty"`
+	// Workloads is the capability declaration (chat / coding / image /
+	// video / audio / render / embedding). Empty defaults to ["chat"]
+	// server-side; unknown values are rejected with a 422.
+	Workloads []string `json:"workloads,omitempty"`
+}
+
+// KnownEdgeWorkloads mirrors backend/pkg/edge.AllWorkloads — the
+// closed set the backend accepts in EdgeNodeCreate.Workloads /
+// EdgeNodeUpdate.Workloads. CLI front-ends validate against this list
+// so a typo fails locally with the allowed values in the message
+// instead of a terse server 422.
+var KnownEdgeWorkloads = []string{
+	"chat",
+	"coding",
+	"image",
+	"video",
+	"audio",
+	"render",
+	"embedding",
 }
 
 // EdgeNodeRegistration is the one-shot response after creating a node.
@@ -154,6 +174,9 @@ func (c *Client) GetEdgeNode(ctx context.Context, id int) (*EdgeNode, error) {
 type EdgeNodeUpdate struct {
 	Name     string   `json:"name,omitempty"`
 	Location *EdgeLoc `json:"location,omitempty"`
+	// Workloads replaces the capability declaration when non-empty;
+	// empty/omitted leaves the stored declaration untouched.
+	Workloads []string `json:"workloads,omitempty"`
 }
 
 // UpdateEdgeNode wraps PUT /api/seller/edge/nodes/:id — the rename /

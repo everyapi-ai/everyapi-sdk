@@ -89,10 +89,11 @@ func (c *Client) ProbeRelayToken(ctx context.Context) error {
 }
 
 // RelayModel describes one model the RELAY token can route to, as
-// reported by GET /v1/models: its id, the upstream channel that owns it
-// (the OpenAI-compatible `owned_by`, which the gateway fills with the
-// channel's adaptor name — "minimax", "deepseek", "moonshot",
-// "zhipu_4v", "ali", "byteplus", …), and the endpoint types it serves
+// reported by GET /v1/models: its id, its provider brand (the
+// OpenAI-compatible `owned_by`, which the gateway derives from the model
+// id — "anthropic", "openai", "deepseek", "zhipu", "minimax", … — never
+// the serving channel; older gateways reported the channel adaptor name
+// like "zhipu_4v"/"ali" instead), and the endpoint types it serves
 // (`anthropic`, `openai`, `image-generation`, `embeddings`, …). Owner +
 // endpoint types back the per-provider model pickers behind
 // `everyapi use <provider>`.

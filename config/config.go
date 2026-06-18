@@ -57,8 +57,18 @@ type Credentials struct {
 	// here. Empty in files written before this field existed —
 	// resolved lazily on the next use/status/login.
 	RelayKey string `json:"relay_key,omitempty"`
-	UserID   int    `json:"user_id,omitempty"`
-	Username string `json:"username,omitempty"`
+	// RefreshToken renews an OAuth2-issued RelayKey before it expires
+	// (device-grant fallback only). Empty for the legacy flow, whose
+	// keys don't expire.
+	RefreshToken string `json:"refresh_token,omitempty"`
+	// RelayKeyExpiresAt is the RelayKey's expiry (unix seconds; 0 =
+	// unknown / non-expiring). Drives proactive refresh.
+	RelayKeyExpiresAt int64 `json:"relay_key_expires_at,omitempty"`
+	// OAuthClientID is the OAuth2 client id used at login, required to
+	// refresh the RelayKey. Empty for the legacy flow.
+	OAuthClientID string `json:"oauth_client_id,omitempty"`
+	UserID        int    `json:"user_id,omitempty"`
+	Username      string `json:"username,omitempty"`
 	// Role mirrors the backend's RoleX enum (0=guest, 1=common,
 	// 10=admin, 100=root). Persisted at login + opportunistically
 	// refreshed by `everyapi status` so help-text rendering can

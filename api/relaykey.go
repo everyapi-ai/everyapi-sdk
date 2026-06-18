@@ -20,9 +20,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/everyapi-ai/everyapi-sdk/config"
 )
+
+// relayKeyRefreshSkew renews an OAuth2-issued relay key once it's within a day
+// of expiry, so a still-valid key is swapped out before it can lapse.
+const relayKeyRefreshSkew = 24 * time.Hour
 
 // ErrNoRelayKey: account has zero enabled relay API keys the caller
 // can use. Callers map this to actionable UI ("create one in
@@ -57,6 +62,9 @@ func ResolveRelayKey(ctx context.Context, creds *config.Credentials, group strin
 		return "", errors.New("not signed in")
 	}
 	if group == "" && creds.RelayKey != "" {
+		if key, ok := refreshRelayKeyIfNeeded(ctx, creds); ok {
+			return key, nil
+		}
 		return creds.RelayKey, nil
 	}
 
@@ -98,4 +106,31 @@ func ResolveRelayKey(ctx context.Context, creds *config.Credentials, group strin
 		return key, &ErrCacheSave{Err: saveErr}
 	}
 	return key, nil
+}
+
+// refreshRelayKeyIfNeeded proactively renews an OAuth2-issued relay key that's
+// within relayKeyRefreshSkew of expiry, updating + persisting creds in place.
+// Returns (newKey, true) only on a successful refresh; (—, false) when there's
+// nothing to renew (legacy/manual creds with no refresh material) or the
+// refresh failed — the caller then uses the cached key, which is either still
+// valid or prompts a re-login on the next API rejection.
+func refreshRelayKeyIfNeeded(ctx context.Context, creds *config.Credentials) (string, bool) {
+	if creds.RefreshToken == "" || creds.OAuthClientID == "" || creds.RelayKeyExpiresAt == 0 {
+		return "", false
+	}
+	if time.Until(time.Unix(creds.RelayKeyExpiresAt, 0)) > relayKeyRefreshSkew {
+		return "", false
+	}
+	tok, err := New(creds.APIBase, "").OAuth2Refresh(ctx, creds.OAuthClientID, creds.RefreshToken)
+	if err != nil {
+		return "", false
+	}
+	// In OAuth2 mode the relay key is also the stored access token; keep both in
+	// sync so management-less commands that read AccessToken see the fresh key.
+	creds.RelayKey = tok.AccessToken
+	creds.AccessToken = tok.AccessToken
+	creds.RefreshToken = tok.RefreshToken
+	creds.RelayKeyExpiresAt = tok.ExpiresAt
+	_ = config.Save(creds)
+	return tok.AccessToken, true
 }

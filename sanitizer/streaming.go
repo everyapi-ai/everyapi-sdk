@@ -114,11 +114,19 @@ func (r *StreamingReplacer) flush(eof bool) string {
 		return s
 	}
 	if cutoff := PartialAtTail(s); cutoff >= 0 {
-		emit := s[:cutoff]
-		carry := s[cutoff:]
-		r.buf.Reset()
-		r.buf.WriteString(carry)
-		return emit
+		// A real placeholder is at most a few dozen bytes (prefix + id digits +
+		// suffix). If the would-be partial tail is implausibly long, an
+		// unterminated prefix can never legitimately grow this large — treat it
+		// as ordinary text and flush verbatim rather than buffering unbounded
+		// carryover (a malicious/buggy upstream could otherwise OOM the proxy).
+		const maxCarry = 1024
+		if len(s)-cutoff <= maxCarry {
+			emit := s[:cutoff]
+			carry := s[cutoff:]
+			r.buf.Reset()
+			r.buf.WriteString(carry)
+			return emit
+		}
 	}
 	// No partial — flush everything, reset buffer.
 	r.buf.Reset()

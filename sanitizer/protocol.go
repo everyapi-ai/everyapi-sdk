@@ -78,22 +78,29 @@ func ScanAndReplaceText(s string, detectors []Detector, m *Mapping) string {
 // Mutates v in place when v is a composite. For top-level strings the
 // caller is responsible (we can't reassign through the any
 // parameter).
-func walkJSON(v any, textKeys map[string]bool, fn func(string) string) any {
+func walkJSON(v any, textKeys map[string]bool, inScope bool, fn func(string) string) any {
 	switch t := v.(type) {
 	case map[string]any:
 		for k, child := range t {
-			if textKeys[k] {
-				if s, ok := child.(string); ok {
+			// Once any ancestor key is a textKey we are inside a user-text
+			// subtree, so every nested string is user text (this is the
+			// documented path-scoped contract). The old code only matched the
+			// immediate parent key, so a secret nested under a text-keyed object
+			// — e.g. tool arguments / a JSON-schema description under
+			// messages[].content[] — slipped through unredacted to upstream.
+			childScope := inScope || textKeys[k]
+			if s, ok := child.(string); ok {
+				if childScope {
 					t[k] = fn(s)
-					continue
 				}
+				continue
 			}
-			t[k] = walkJSON(child, textKeys, fn)
+			t[k] = walkJSON(child, textKeys, childScope, fn)
 		}
 		return t
 	case []any:
 		for i, child := range t {
-			t[i] = walkJSON(child, textKeys, fn)
+			t[i] = walkJSON(child, textKeys, inScope, fn)
 		}
 		return t
 	default:
@@ -126,7 +133,7 @@ func rewriteJSONBody(body []byte, textKeys map[string]bool, detectors []Detector
 		// from the SDK's perspective.
 		return body, nil //nolint:nilerr
 	}
-	walkJSON(root, textKeys, func(s string) string {
+	walkJSON(root, textKeys, false, func(s string) string {
 		return ScanAndReplaceText(s, detectors, m)
 	})
 	// Re-marshal WITHOUT HTML-escaping (`<` → `<`). The

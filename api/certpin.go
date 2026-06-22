@@ -7,10 +7,12 @@
 //   - expectedSPKIPins EMPTY: the hook is a SILENT no-op (the dormant
 //     state this shipped in originally — kept as the safe default if
 //     the set is ever cleared).
-//   - expectedSPKIPins POPULATED (NOW — real leaf pins are filled in):
-//     silent when the leaf SPKI pin is in the set; warn once per
-//     host+pin on mismatch (still allowing the connection — a
-//     corporate/ISP TLS proxy is a common benign cause).
+//   - expectedSPKIPins POPULATED (NOW): silent when ANY cert in a
+//     VERIFIED chain (leaf OR an issuing intermediate) has its SPKI in
+//     the set; warn once per host+pin on mismatch (still allowing the
+//     connection — a corporate/ISP TLS proxy is a common benign cause).
+//     Pinning the long-lived intermediate is what lets the
+//     frequently-rotated leaf change without a CLI release.
 //     `pinReporter.enforce` (reserved) flips that warning into a hard
 //     rejection in a later change; it is still false here.
 //
@@ -47,34 +49,40 @@ import (
 // is actually verified keeps the set honest and avoids shipping
 // config no smoke test can reach.
 //
-// LIVE LEAF pin captured 2026-05-19 (Fly/Let's Encrypt leaf). This is
-// the LEAF, not the issuing intermediate, so it WILL go stale when
-// Let's Encrypt rotates (~60–90 days). Acceptable because pinning is
-// report-only (a stale pin only produces a one-line stderr warning,
-// never a broken connection) and rotation is scheduled maintenance:
+// Captured 2026-06-23 from the live k8s ingress, which serves a Google
+// Trust Services chain:  leaf  <  WE1 intermediate  <  GTS Root R4.
 //
-// ── CERT-ROTATION RUNBOOK ──────────────────────────────────────────
-//  1. Re-capture the live leaf pin:
-//     openssl s_client -servername api.everyapi.ai \
-//     -connect api.everyapi.ai:443 </dev/null 2>/dev/null \
-//     | openssl x509 -noout -pubkey | openssl pkey -pubin \
-//     -outform der 2>/dev/null | openssl dgst -sha256 -binary \
-//     | openssl base64
-//  2. Replace the value below; bump the capture date in this comment.
-//  3. Ship a CLI release. Until users upgrade, an old binary just logs
-//     the (benign) mismatch — no functional breakage.
+// inspect() matches against EVERY certificate the server presents (leaf
+// + intermediates), so we pin the long-lived ISSUING INTERMEDIATE (WE1)
+// rather than the leaf. WE1 signs our leaf and rotates on a multi-year
+// cadence, so a routine ~90-day leaf rotation keeps matching it with NO
+// code change and NO CLI release. That is the entire point of pinning
+// the intermediate instead of the leaf.
 //
-// NOTE: inspect() only computes the LEAF cert's SPKI and checks
-// membership here — it does not walk the chain. So simply adding an
-// issuing-intermediate pin to this map would be inert today. Making
-// the CLI survive a leaf rotation WITHOUT a release requires BOTH
-// adding the intermediate pin here AND changing inspect() to also
-// accept a match on any chain cert's SPKI. That is a deliberate
-// follow-up, tracked for the enforce PR; flagged here so it isn't
-// lost.
-// ───────────────────────────────────────────────────────────────────
+// We deliberately do NOT pin the leaf: a leaf pin goes stale on every
+// rotation. This is a real trade-off, not a free lunch — an
+// intermediate-only pin detects CA SUBSTITUTION (a corporate/ISP TLS
+// proxy, a different CA, or mis-issuance from a *different*
+// intermediate) but NOT a fraudulent leaf mis-issued for our host under
+// this SAME WE1 intermediate. For report-only "are we behind a TLS
+// proxy?" detection that trade is acceptable; if leaf-level assurance is
+// ever needed (e.g. before flipping enforce on), pin the leaf too and
+// treat leaf-absent-but-intermediate-present as a softer signal.
+//
+// ── WHEN TO UPDATE (NOT on routine leaf rotation) ───────────────────
+// Only when the issuing CA changes — a new GTS intermediate (e.g. WE2)
+// or a migration to a different CA. Re-capture the chain:
+//   openssl s_client -servername api.everyapi.ai \
+//   -connect api.everyapi.ai:443 -showcerts </dev/null 2>/dev/null
+// then for the INTERMEDIATE cert in that dump:
+//   openssl x509 -noout -pubkey | openssl pkey -pubin -outform der \
+//   | openssl dgst -sha256 -binary | openssl base64
+// ADD the new pin (keep the old one until it is fully retired). Until
+// users upgrade, an old binary just logs the benign mismatch — no
+// functional breakage.
+// ────────────────────────────────────────────────────────────────────
 var expectedSPKIPins = map[string]struct{}{
-	"8ero6X8jXA0TU+kjHCqNRfOHlpO6N8K/CC2bvxCGQ1g=": {}, // api.everyapi.ai (Fly/Let's Encrypt leaf)
+	"kIdp6NNEd8wsugYyyIYFsi1ylMCED3hZbSR8ZFsa/A4=": {}, // GTS "WE1" intermediate — issues the api.everyapi.ai leaf
 }
 
 // isOfficialEveryAPIHost reports whether host is an official EveryAPI
@@ -133,8 +141,18 @@ func newPinReporter() *pinReporter {
 // verification — so this only ever ADDS a report, it does not relax
 // or replace chain validation. It returns nil unconditionally while
 // enforce is false.
-func (p *pinReporter) inspect(serverName string, leaf *x509.Certificate) error {
-	if p == nil || p.disabled || leaf == nil {
+//
+// chains is cs.VerifiedChains: the chains the standard verifier actually
+// built, each leaf-first with a trusted root last. We match against
+// these, NOT the raw server-presented cs.PeerCertificates, on purpose: a
+// MITM can pad the presented list with the real (public) WE1 cert to
+// satisfy an intermediate pin, but it cannot get that intermediate onto
+// a chain that verifies to a trusted root unless it genuinely signed the
+// leaf. A match on ANY cert's SPKI in ANY verified chain — leaf or an
+// issuing intermediate — counts: pinning the intermediate is what lets
+// the leaf rotate without a release. The warning reports the leaf's pin.
+func (p *pinReporter) inspect(serverName string, chains [][]*x509.Certificate) error {
+	if p == nil || p.disabled || len(chains) == 0 || len(chains[0]) == 0 {
 		return nil
 	}
 	if !isOfficialEveryAPIHost(serverName) {
@@ -148,18 +166,26 @@ func (p *pinReporter) inspect(serverName string, leaf *x509.Certificate) error {
 		return nil
 	}
 
-	pin := spkiPin(leaf)
-	if _, ok := p.expected[pin]; ok {
-		return nil
+	for _, chain := range chains {
+		for _, cert := range chain {
+			if cert == nil {
+				continue
+			}
+			if _, ok := p.expected[spkiPin(cert)]; ok {
+				return nil
+			}
+		}
 	}
 
-	// Mismatch. Loud, but still report-only: the connection is
-	// allowed. A later change returns an error here when enforce.
-	p.logOnce(serverName, pin, fmt.Sprintf(
+	// Mismatch: nothing in any verified chain matched. Loud, but still
+	// report-only: the connection is allowed. A later change returns an
+	// error here when enforce. Report the leaf pin (chains[0][0]).
+	leafPin := spkiPin(chains[0][0])
+	p.logOnce(serverName, leafPin, fmt.Sprintf(
 		"⚠ everyapi: TLS public-key pin MISMATCH for %s (got sha256/%s). "+
 			"This can mean a corporate/ISP TLS proxy, or an attack. "+
 			"Connection ALLOWED (pinning is report-only). "+
-			"Set EVERYAPI_TLS_PIN=off to silence.", serverName, pin))
+			"Set EVERYAPI_TLS_PIN=off to silence.", serverName, leafPin))
 	if p.enforce {
 		return fmt.Errorf("everyapi: TLS pin mismatch for %s", serverName)
 	}
@@ -218,11 +244,13 @@ func pinReportingTransport() *http.Transport {
 			cfg = &tls.Config{MinVersion: tls.VersionTLS12}
 		}
 		cfg.VerifyConnection = func(cs tls.ConnectionState) error {
-			var leaf *x509.Certificate
-			if len(cs.PeerCertificates) > 0 {
-				leaf = cs.PeerCertificates[0]
-			}
-			return getPinReporter().inspect(cs.ServerName, leaf)
+			// VerifiedChains, not PeerCertificates: only certs on a chain
+			// that actually verifies to a trusted root count, so a
+			// presented list padded with an unrelated (public)
+			// intermediate cannot satisfy the pin. Empty only under
+			// InsecureSkipVerify (this client never sets it); populated
+			// on resumed sessions too — inspect() no-ops if ever empty.
+			return getPinReporter().inspect(cs.ServerName, cs.VerifiedChains)
 		}
 		tr.TLSClientConfig = cfg
 		pinnedTransport = tr

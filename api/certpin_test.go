@@ -101,10 +101,10 @@ func TestInspectDormantWhenNoPins(t *testing.T) {
 	r := newTestReporter(buf, map[string]struct{}{}) // empty = dormant
 	leaf := makeLeaf(t)
 
-	if err := r.inspect("api.everyapi.ai", leaf); err != nil {
+	if err := r.inspect("api.everyapi.ai", [][]*x509.Certificate{{leaf}}); err != nil {
 		t.Fatalf("report-only must never error: %v", err)
 	}
-	if err := r.inspect("api.everyapi.ai", leaf); err != nil {
+	if err := r.inspect("api.everyapi.ai", [][]*x509.Certificate{{leaf}}); err != nil {
 		t.Fatalf("report-only must never error: %v", err)
 	}
 	if buf.Len() != 0 {
@@ -115,7 +115,7 @@ func TestInspectDormantWhenNoPins(t *testing.T) {
 func TestInspectSkipsNonOfficialHost(t *testing.T) {
 	buf := &bytes.Buffer{}
 	r := newTestReporter(buf, map[string]struct{}{})
-	if err := r.inspect("localhost", makeLeaf(t)); err != nil {
+	if err := r.inspect("localhost", [][]*x509.Certificate{{makeLeaf(t)}}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if buf.Len() != 0 {
@@ -135,7 +135,7 @@ func TestInspectDisabledIsNoOp(t *testing.T) {
 	buf := &bytes.Buffer{}
 	r.out = buf
 	r.expected = map[string]struct{}{"some-other-pin": {}}
-	if err := r.inspect("api.everyapi.ai", makeLeaf(t)); err != nil {
+	if err := r.inspect("api.everyapi.ai", [][]*x509.Certificate{{makeLeaf(t)}}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if buf.Len() != 0 {
@@ -150,7 +150,7 @@ func TestInspectMatchVsMismatch(t *testing.T) {
 	// Seeded expected set containing this leaf's pin → silent match.
 	buf := &bytes.Buffer{}
 	r := newTestReporter(buf, map[string]struct{}{pin: {}})
-	if err := r.inspect("app.everyapi.ai", leaf); err != nil {
+	if err := r.inspect("app.everyapi.ai", [][]*x509.Certificate{{leaf}}); err != nil {
 		t.Fatalf("matching pin must not error: %v", err)
 	}
 	if buf.Len() != 0 {
@@ -159,7 +159,7 @@ func TestInspectMatchVsMismatch(t *testing.T) {
 
 	// A different cert is not in the expected set → loud, still nil.
 	other := makeLeaf(t)
-	if err := r.inspect("app.everyapi.ai", other); err != nil {
+	if err := r.inspect("app.everyapi.ai", [][]*x509.Certificate{{other}}); err != nil {
 		t.Fatalf("report-only mismatch must not error: %v", err)
 	}
 	if !strings.Contains(buf.String(), "MISMATCH") {
@@ -170,8 +170,77 @@ func TestInspectMatchVsMismatch(t *testing.T) {
 	// reserved enforcement path the next change will turn on).
 	r2 := newTestReporter(&bytes.Buffer{}, map[string]struct{}{pin: {}})
 	r2.enforce = true
-	if err := r2.inspect("app.everyapi.ai", makeLeaf(t)); err == nil {
+	if err := r2.inspect("app.everyapi.ai", [][]*x509.Certificate{{makeLeaf(t)}}); err == nil {
 		t.Error("enforce=true must reject a pin mismatch")
+	}
+}
+
+// TestInspectMatchesIntermediateInChain is the core of the cert-rotation
+// fix: the leaf is NOT pinned, only an issuing intermediate is. A chain
+// whose leaf pin is absent but whose intermediate pin is present must
+// match silently — that is what lets the leaf rotate without a release.
+func TestInspectMatchesIntermediateInChain(t *testing.T) {
+	leaf := makeLeaf(t)
+	intermediate := makeLeaf(t) // stand-in for the issuing CA cert
+	interPin := spkiPin(intermediate)
+
+	// Expected set pins ONLY the intermediate, never the leaf.
+	buf := &bytes.Buffer{}
+	r := newTestReporter(buf, map[string]struct{}{interPin: {}})
+
+	if err := r.inspect("api.everyapi.ai", [][]*x509.Certificate{{leaf, intermediate}}); err != nil {
+		t.Fatalf("intermediate match must not error: %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("intermediate match must be silent (leaf rotation case), got: %q", buf.String())
+	}
+
+	// A chain where neither leaf nor intermediate is pinned → mismatch,
+	// and the warning reports the LEAF pin (chains[0][0]), not the others.
+	other, otherInter := makeLeaf(t), makeLeaf(t)
+	if err := r.inspect("api.everyapi.ai", [][]*x509.Certificate{{other, otherInter}}); err != nil {
+		t.Fatalf("report-only mismatch must not error: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "MISMATCH") {
+		t.Errorf("expected mismatch warning, got: %q", out)
+	}
+	if !strings.Contains(out, spkiPin(other)) {
+		t.Errorf("warning must report the leaf pin %q, got: %q", spkiPin(other), out)
+	}
+	// Must report ONLY the leaf (chains[0][0]), never some other chain cert.
+	if strings.Contains(out, spkiPin(otherInter)) {
+		t.Errorf("warning must not report the intermediate pin %q, got: %q", spkiPin(otherInter), out)
+	}
+}
+
+// TestInspectMultiChainMatchAndEmptyGuard covers the cross-signed case —
+// cs.VerifiedChains can hold more than one chain (GTS R4 is itself
+// cross-signed) — and the empty-inner-chain guard protecting the
+// chains[0][0] deref on the mismatch path.
+func TestInspectMultiChainMatchAndEmptyGuard(t *testing.T) {
+	intermediate := makeLeaf(t)
+	interPin := spkiPin(intermediate)
+
+	buf := &bytes.Buffer{}
+	r := newTestReporter(buf, map[string]struct{}{interPin: {}})
+
+	// The pinned intermediate appears ONLY in the second verified chain;
+	// the outer loop must still find it → silent match.
+	chains := [][]*x509.Certificate{
+		{makeLeaf(t), makeLeaf(t)},  // unrelated cross-signed path
+		{makeLeaf(t), intermediate}, // path carrying the pinned WE1
+	}
+	if err := r.inspect("api.everyapi.ai", chains); err != nil {
+		t.Fatalf("match in a non-first chain must not error: %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("match in the second chain must be silent, got: %q", buf.String())
+	}
+
+	// An empty inner chain must no-op, not panic on the chains[0][0] deref.
+	if err := r.inspect("api.everyapi.ai", [][]*x509.Certificate{{}}); err != nil {
+		t.Fatalf("empty inner chain must not error: %v", err)
 	}
 }
 

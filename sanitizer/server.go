@@ -566,7 +566,7 @@ var upstreamClient = &http.Client{
 		MaxIdleConnsPerHost:   10,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: 30 * time.Second,
+		ResponseHeaderTimeout: 300 * time.Second, // extended-thinking first-byte can run minutes; Timeout:0 + request ctx still bound the whole call
 		ExpectContinueTimeout: 1 * time.Second,
 	},
 }

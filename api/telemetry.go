@@ -245,14 +245,22 @@ func (c *Client) UserQuotaDates(ctx context.Context, start, end int64) ([]QuotaD
 	return env.Data, nil
 }
 
-// UserModels returns the set of model ids the caller's group can
-// route to. Filters out any blank entries the backend's defensive
+// UserModel is one model the caller's group can route to, with its
+// vendor (provider display name, e.g. "Anthropic"). Vendor is "" when
+// the model has no known vendor — callers can group those as "Other".
+type UserModel struct {
+	ID     string `json:"id"`
+	Vendor string `json:"vendor"`
+}
+
+// UserModels returns the models the caller's group can route to, each
+// with its vendor. Filters out any blank entries the backend's defensive
 // pass missed — callers shouldn't have to dedupe "".
-func (c *Client) UserModels(ctx context.Context) ([]string, error) {
+func (c *Client) UserModels(ctx context.Context) ([]UserModel, error) {
 	var env struct {
-		Success bool     `json:"success"`
-		Message string   `json:"message"`
-		Data    []string `json:"data"`
+		Success bool        `json:"success"`
+		Message string      `json:"message"`
+		Data    []UserModel `json:"data"`
 	}
 	if err := c.do(ctx, "GET", "/api/user/models", nil, &env); err != nil {
 		return nil, err
@@ -262,7 +270,7 @@ func (c *Client) UserModels(ctx context.Context) ([]string, error) {
 	}
 	out := env.Data[:0]
 	for _, m := range env.Data {
-		if m != "" {
+		if m.ID != "" {
 			out = append(out, m)
 		}
 	}

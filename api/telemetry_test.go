@@ -122,21 +122,22 @@ func TestUserQuotaDates(t *testing.T) {
 }
 
 func TestUserModels(t *testing.T) {
-	t.Run("filters blank entries the server may emit", func(t *testing.T) {
+	t.Run("filters blank entries and carries vendor", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/api/user/models" {
 				t.Errorf("path = %q", r.URL.Path)
 			}
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"success":true,"data":["gpt-4o","","claude-sonnet-4"]}`))
+			w.Write([]byte(`{"success":true,"data":[{"id":"gpt-4o","vendor":"OpenAI"},{"id":"","vendor":""},{"id":"claude-sonnet-4","vendor":"Anthropic"}]}`))
 		}))
 		defer srv.Close()
 		out, err := New(srv.URL, "acc").WithUserID(7).UserModels(context.Background())
 		if err != nil {
 			t.Fatalf("UserModels: %v", err)
 		}
-		if len(out) != 2 || out[0] != "gpt-4o" || out[1] != "claude-sonnet-4" {
-			t.Errorf("blank entries not filtered; got %v", out)
+		if len(out) != 2 || out[0].ID != "gpt-4o" || out[0].Vendor != "OpenAI" ||
+			out[1].ID != "claude-sonnet-4" || out[1].Vendor != "Anthropic" {
+			t.Errorf("blank entries not filtered or vendor lost; got %+v", out)
 		}
 	})
 }

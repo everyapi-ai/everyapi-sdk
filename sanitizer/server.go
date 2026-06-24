@@ -102,12 +102,12 @@ type Server struct {
 }
 
 type stats struct {
-	requests     atomic.Int64
-	sanitised    atomic.Int64 // # requests that fired at least one detector
-	bytesIn      atomic.Int64
-	bytesOut     atomic.Int64
-	startedAt    time.Time
-	startedAtMu  sync.RWMutex
+	requests    atomic.Int64
+	sanitised   atomic.Int64 // # requests that fired at least one detector
+	bytesIn     atomic.Int64
+	bytesOut    atomic.Int64
+	startedAt   time.Time
+	startedAtMu sync.RWMutex
 }
 
 // New constructs a Server. Call Run to start it.
@@ -147,13 +147,33 @@ func New(cfg Config) (*Server, error) {
 	return s, nil
 }
 
-// Run binds the listener and blocks until ctx is canceled or the HTTP
+// Run binds cfg.Listen and blocks until ctx is canceled or the HTTP
 // server errors. Returns nil on graceful shutdown, the underlying
 // error otherwise.
 func (s *Server) Run(ctx context.Context) error {
 	listener, err := net.Listen("tcp", s.cfg.Listen)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", s.cfg.Listen, err)
+	}
+	return s.Serve(ctx, listener)
+}
+
+// Serve runs the proxy on an ALREADY-BOUND listener instead of binding
+// cfg.Listen itself. In-process callers use this so they can own the
+// listener: there's no bind TOCTOU (the caller holds the port from the
+// moment it's chosen), and no chance a readiness probe adopts some other
+// process's sanitizer that happened to grab the same port. Takes
+// ownership of `listener` — it's closed when Serve returns.
+func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
+	// Enforce the loopback invariant against the listener Serve ACTUALLY
+	// binds, not just cfg.Listen (which New validated). Serve takes a
+	// caller-supplied listener, so the address it serves on is no longer
+	// guaranteed to match cfg.Listen; the proxy holds plaintext secrets
+	// and has no auth, so it must never end up on a public interface.
+	if !s.cfg.AllowNonLoopback && !addrIsLoopback(listener.Addr()) {
+		_ = listener.Close()
+		return fmt.Errorf("refusing to serve sanitizer on non-loopback listener %s; "+
+			"it holds plaintext secrets and has no auth (set AllowNonLoopback to override)", listener.Addr())
 	}
 	// Wrap the caller's ctx so the parent-pid watcher can cancel
 	// alongside SIGINT etc. without needing a separate channel.
@@ -173,10 +193,16 @@ func (s *Server) Run(ctx context.Context) error {
 		doneShutdown <- s.http.Shutdown(shutCtx)
 	}()
 	s.cfg.Logger.Printf("sanitizer: listening on http://%s → %s", listener.Addr(), s.cfg.UpstreamBase)
-	err = s.http.Serve(listener)
+	err := s.http.Serve(listener)
 	if errors.Is(err, http.ErrServerClosed) {
 		err = nil
 	}
+	// Fire cancel unconditionally before waiting on the shutdown
+	// goroutine: if Serve returned on its OWN (a fatal Accept error, not
+	// a ctx-driven shutdown), the shutdown goroutine is still parked on
+	// <-ctx.Done() and would deadlock this receive. cancelRun() is
+	// idempotent, so this is a no-op on the normal ctx-cancel path.
+	cancelRun()
 	if shutErr := <-doneShutdown; shutErr != nil && err == nil {
 		err = shutErr
 	}
@@ -593,6 +619,22 @@ var hopByHopSet = func() map[string]bool {
 	}
 	return m
 }()
+
+// addrIsLoopback reports whether a bound listener address is on a
+// loopback interface. Unlike requireLoopback (which validates a config
+// string that may be a hostname), this inspects an already-resolved
+// net.Addr, so it can assume a concrete IP.
+func addrIsLoopback(addr net.Addr) bool {
+	if ta, ok := addr.(*net.TCPAddr); ok {
+		return ta.IP.IsLoopback()
+	}
+	host, _, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
 
 // requireLoopback rejects a Listen address that isn't bound to a
 // loopback interface. An empty host ("" / ":8888") means "all

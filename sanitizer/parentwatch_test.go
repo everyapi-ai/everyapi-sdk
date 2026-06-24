@@ -151,3 +151,61 @@ func TestPidAlive_DeadProcess(t *testing.T) {
 		t.Errorf("pidAlive(0) returned true; want false (sentinel)")
 	}
 }
+
+// TestServer_ServeUnwindsOnListenerClose exercises Serve on a caller-
+// provided listener and, more importantly, guards the deadlock fix: when
+// the listener is closed out from under Serve WITHOUT a ctx cancel,
+// http.Serve returns on its own and the shutdown goroutine must still be
+// released (it waits on ctx.Done, which the explicit cancelRun() before
+// the doneShutdown receive now fires). Before the fix this receive
+// deadlocked and Serve never returned.
+func TestServer_ServeUnwindsOnListenerClose(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(204)
+	}))
+	defer upstream.Close()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+
+	srv, err := New(Config{
+		Listen:       addr,
+		UpstreamBase: upstream.URL,
+		Logger:       log.New(io.Discard, "", 0),
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- srv.Serve(context.Background(), ln) }()
+
+	// Wait until it's actually serving.
+	healthy := false
+	dl := time.Now().Add(2 * time.Second)
+	for time.Now().Before(dl) {
+		resp, derr := http.Get("http://" + addr + "/__sanitizer/health")
+		if derr == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == 200 {
+				healthy = true
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !healthy {
+		t.Fatalf("proxy never became healthy")
+	}
+
+	// Close the listener out from under Serve, ctx NOT cancelled.
+	_ = ln.Close()
+	select {
+	case <-done: // Serve returned — no deadlock.
+	case <-time.After(8 * time.Second):
+		t.Fatalf("Serve did not return within 8s of listener close (deadlock regression)")
+	}
+}

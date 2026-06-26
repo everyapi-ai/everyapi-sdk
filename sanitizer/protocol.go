@@ -64,43 +64,93 @@ func ScanAndReplaceText(s string, detectors []Detector, m *Mapping) string {
 	return ReplaceWith(s, matches, m)
 }
 
+// binaryExcludeKeys are object keys whose subtree carries base64 / binary
+// payloads. Scanning them is never useful and a detector false-positive
+// would splice a placeholder into the blob, corrupting the image /
+// document irrecoverably on the way upstream. The whole subtree is
+// skipped.
+var binaryExcludeKeys = map[string]bool{
+	"source":     true, // Anthropic image/document blocks: source.data base64
+	"data":       true, // generic base64 data field
+	"inlineData": true, // Gemini inline base64 (belt-and-suspenders)
+}
+
+// numericExcludeKeys are object keys whose subtree is tool I/O or JSON-
+// schema metadata where the checksum-only numeric detectors produce a
+// flood of false positives. Key-shaped detectors (API keys, PEM, …) still
+// run there — a real API key in a tool argument should be masked outbound
+// — but the numeric ones are scoped away.
+var numericExcludeKeys = map[string]bool{
+	"input":     true, // tool_use input arguments
+	"arguments": true, // tool_calls function arguments
+	"default":   true, // JSON-schema default
+	"enum":      true, // JSON-schema enum
+	"const":     true, // JSON-schema const
+}
+
+// isDataURL reports whether a string leaf is a data: URL (inline base64),
+// e.g. an OpenAI image_url.url. Those are binary and must not be scanned.
+func isDataURL(s string) bool {
+	return strings.HasPrefix(s, "data:")
+}
+
+// nonNumericDetectors returns the detector slice with the checksum/numeric
+// built-ins (luhn, chinese_id) removed, for use inside numeric-excluded
+// subtrees.
+func nonNumericDetectors(detectors []Detector) []Detector {
+	out := make([]Detector, 0, len(detectors))
+	for _, d := range detectors {
+		if numericDetectorNames[d.Name()] {
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
 // walkJSON walks a parsed JSON tree (map[string]any / []any / string
 // / number / bool / nil) and applies fn to every string value
-// reachable along a path matching one of textFieldKeys. The path is
-// the bag-of-keys we encountered descending into the tree.
+// reachable along a path that is in text scope (some ancestor key was a
+// textKey). fn receives a numericOK flag that is false inside tool-arg /
+// schema / tool-result subtrees, so the caller can drop numeric detectors
+// there.
 //
-// Matching is permissive: if any segment of the descent path is one
-// of the textFieldKeys, the leaf string is treated as user text.
-// This catches deeply-nested variants — e.g. Anthropic's
-// `messages[].content[].text` — without needing to enumerate every
-// shape in the API surface.
+// Matching is permissive: once any segment of the descent path is one of
+// the textKeys, the leaf string is treated as user text. This catches
+// deeply-nested variants — e.g. Anthropic's `messages[].content[].text` —
+// without enumerating every shape in the API surface. Binary-carrying
+// subtrees (binaryExcludeKeys) and data: URL leaves are skipped entirely.
 //
 // Mutates v in place when v is a composite. For top-level strings the
-// caller is responsible (we can't reassign through the any
-// parameter).
-func walkJSON(v any, textKeys map[string]bool, inScope bool, fn func(string) string) any {
+// caller is responsible (we can't reassign through the any parameter).
+func walkJSON(v any, textKeys map[string]bool, inScope, numericOK bool, fn func(s string, numericOK bool) string) any {
 	switch t := v.(type) {
 	case map[string]any:
+		// A tool_result block carries tool OUTPUT — scope numeric
+		// detectors away from its whole subtree (high FP, and not a place
+		// users paste fresh secrets).
+		baseNumeric := numericOK
+		if bt, _ := t["type"].(string); bt == "tool_result" {
+			baseNumeric = false
+		}
 		for k, child := range t {
-			// Once any ancestor key is a textKey we are inside a user-text
-			// subtree, so every nested string is user text (this is the
-			// documented path-scoped contract). The old code only matched the
-			// immediate parent key, so a secret nested under a text-keyed object
-			// — e.g. tool arguments / a JSON-schema description under
-			// messages[].content[] — slipped through unredacted to upstream.
+			if binaryExcludeKeys[k] {
+				continue // never scan binary blobs
+			}
 			childScope := inScope || textKeys[k]
+			childNumeric := baseNumeric && !numericExcludeKeys[k]
 			if s, ok := child.(string); ok {
-				if childScope {
-					t[k] = fn(s)
+				if childScope && !isDataURL(s) {
+					t[k] = fn(s, childNumeric)
 				}
 				continue
 			}
-			t[k] = walkJSON(child, textKeys, childScope, fn)
+			t[k] = walkJSON(child, textKeys, childScope, childNumeric, fn)
 		}
 		return t
 	case []any:
 		for i, child := range t {
-			t[i] = walkJSON(child, textKeys, inScope, fn)
+			t[i] = walkJSON(child, textKeys, inScope, numericOK, fn)
 		}
 		return t
 	default:
@@ -126,37 +176,46 @@ func rewriteJSONBody(body []byte, textKeys map[string]bool, detectors []Detector
 	if !strings.HasPrefix(trimmed, "{") && !strings.HasPrefix(trimmed, "[") {
 		return body, nil
 	}
+	// Decode with UseNumber so integers beyond 2^53 (a seed, a Snowflake
+	// id in a tool argument) round-trip through their exact digits instead
+	// of being mangled by float64 on re-marshal.
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
 	var root any
-	if err := json.Unmarshal(body, &root); err != nil {
+	if err := dec.Decode(&root); err != nil {
 		// Pass through unchanged. The upstream will produce the
 		// right HTTP-level error if the JSON was actually malformed
 		// from the SDK's perspective.
 		return body, nil //nolint:nilerr
 	}
-	walkJSON(root, textKeys, false, func(s string) string {
-		return ScanAndReplaceText(s, detectors, m)
+	nonNumeric := nonNumericDetectors(detectors)
+	dirty := false
+	walkJSON(root, textKeys, false, true, func(s string, numericOK bool) string {
+		ds := detectors
+		if !numericOK {
+			ds = nonNumeric
+		}
+		out := ScanAndReplaceText(s, ds, m)
+		if out != s {
+			dirty = true
+		}
+		return out
 	})
-	// Re-marshal WITHOUT HTML-escaping (`<` → `<`). The
-	// placeholder syntax uses literal `<<` and `>>` brackets; if the
-	// outbound body encodes those as `<<`, the upstream's
-	// prompt-cache key — which is computed from the raw request
-	// bytes — rotates on every byte-equivalent-but-textually-different
-	// representation, defeating the stable-mapping property the spec
-	// promises. json.Encoder.SetEscapeHTML(false) keeps `<` literal.
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(root); err != nil {
-		return nil, fmt.Errorf("re-marshal rewritten body: %w", err)
+	// Nothing fired: return the ORIGINAL bytes untouched. Re-marshalling a
+	// clean body would reorder keys and re-normalise number formatting,
+	// rotating the upstream prompt-cache key for no reason.
+	if !dirty {
+		return body, nil
 	}
-	// json.Encoder appends a trailing newline; the upstream's HTTP
-	// stack handles it fine, but we strip it to keep the body
-	// byte-for-byte minimal (and to match the no-rewrite passthrough
-	// shape, where the body comes off the wire without a trailing
-	// newline).
-	out := buf.Bytes()
-	if n := len(out); n > 0 && out[n-1] == '\n' {
-		out = out[:n-1]
+	// Re-marshal WITHOUT HTML-escaping (`<` → `<`). The placeholder
+	// syntax uses literal `<<` and `>>` brackets; encoding those as
+	// `<<` would rotate the upstream prompt-cache key (computed
+	// from the raw request bytes) on every call, defeating the stable-
+	// mapping property the spec promises. SetEscapeHTML(false) also lets a
+	// masked value's surrounding text keep its `<`/`>` literal.
+	out, err := encodeJSONNoHTMLEscape(root)
+	if err != nil {
+		return nil, fmt.Errorf("re-marshal rewritten body: %w", err)
 	}
 	return out, nil
 }

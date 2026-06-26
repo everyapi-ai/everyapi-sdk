@@ -22,7 +22,7 @@ const (
 	DetectorChineseID      = "chinese_id"
 )
 
-// BuiltinDetectors returns the default detector set in registration
+// BuiltinDetectors returns the DEFAULT-ON detector set in registration
 // order. Caller can append custom RegexDetectors after these.
 //
 // Registration order matters for ties when Scan resolves overlaps —
@@ -30,6 +30,13 @@ const (
 // detector so a `sk-ant-foo` hit is reported as the Anthropic match
 // (the OpenAI regex would also match the `sk-` prefix shape; longest
 // wins, but on a tie the earlier-registered detector takes priority).
+//
+// The checksum-only numeric detectors (luhn_credit_card, chinese_id) are
+// deliberately NOT here: a bare Luhn/mod-11 check matches ~10-18% of every
+// 13-19 digit number (ms timestamps, Snowflake/Discord ids, int64s), so
+// running them by default punches holes in legitimate payloads far more
+// often than it catches a real card/ID. They are OPT-IN via FileConfig
+// (see optInDetectors / OptInDetectorNames).
 func BuiltinDetectors() []Detector {
 	return []Detector{
 		anthropicKeyDetector(),
@@ -41,9 +48,32 @@ func BuiltinDetectors() []Detector {
 		stripeKeyDetector(),
 		awsAccessKeyDetector(),
 		pemPrivateKeyDetector(),
-		luhnCreditCardDetector(),
-		chineseIDDetector(),
 	}
+}
+
+// optInDetectorsByName maps each opt-in detector name to its constructor.
+// These are off unless explicitly enabled in the user config.
+func optInDetectorsByName() map[string]func() Detector {
+	return map[string]func() Detector{
+		DetectorLuhnCreditCard: func() Detector { return luhnCreditCardDetector() },
+		DetectorChineseID:      func() Detector { return chineseIDDetector() },
+	}
+}
+
+// OptInDetectorNames returns the names of detectors that ship disabled by
+// default and must be explicitly enabled (FileConfig.Enabled). Surfaced
+// by the configure UI alongside the default-on set.
+func OptInDetectorNames() []string {
+	return []string{DetectorLuhnCreditCard, DetectorChineseID}
+}
+
+// numericDetectorNames is the set of checksum/numeric-shaped detectors
+// whose false-positive blast radius makes them unsafe to run inside
+// tool-argument / tool-result / JSON-schema subtrees of a request. Used
+// by the request walk to scope them away from those positions.
+var numericDetectorNames = map[string]bool{
+	DetectorLuhnCreditCard: true,
+	DetectorChineseID:      true,
 }
 
 // ---- OpenAI ----------------------------------------------------------------

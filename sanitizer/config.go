@@ -36,6 +36,12 @@ type FileConfig struct {
 	// Invalid regexes are dropped at load time (CompileUserPatterns
 	// already does the right thing).
 	CustomPatterns []UserPattern `json:"custom_patterns,omitempty"`
+
+	// Enabled lists opt-in built-in detector names to switch ON. These
+	// (luhn_credit_card, chinese_id — see OptInDetectorNames) ship
+	// disabled by default because their checksum-only matching has a high
+	// false-positive rate; a user who genuinely wants them opts in here.
+	Enabled []string `json:"enabled,omitempty"`
 }
 
 // ConfigPath resolves to ~/.config/everyapi/sanitizer.json. Returns the
@@ -105,9 +111,13 @@ func SaveFileConfig(fc *FileConfig) error {
 // Passing a nil receiver is OK — returns BuiltinDetectors() unchanged.
 func (fc *FileConfig) BuildDetectors() []Detector {
 	disabled := make(map[string]bool)
+	enabled := make(map[string]bool)
 	if fc != nil {
 		for _, name := range fc.Disabled {
 			disabled[name] = true
+		}
+		for _, name := range fc.Enabled {
+			enabled[name] = true
 		}
 	}
 	var out []Detector
@@ -117,19 +127,29 @@ func (fc *FileConfig) BuildDetectors() []Detector {
 		}
 		out = append(out, d)
 	}
+	// Append any opt-in detectors the user explicitly enabled (and didn't
+	// also disable). These ship off by default; Enabled turns them on.
+	for name, ctor := range optInDetectorsByName() {
+		if enabled[name] && !disabled[name] {
+			out = append(out, ctor())
+		}
+	}
 	if fc != nil && len(fc.CustomPatterns) > 0 {
 		out = append(out, CompileUserPatterns(fc.CustomPatterns)...)
 	}
 	return out
 }
 
-// AllBuiltinNames returns the names of every shipped detector. Used
-// by the configure wizard to render the toggle list.
+// AllBuiltinNames returns the names of every shipped detector — the
+// default-on set plus the opt-in ones — so the configure wizard can
+// render the full toggle list. Default-on detectors come first, in
+// registration order, followed by the opt-in detectors.
 func AllBuiltinNames() []string {
 	bs := BuiltinDetectors()
-	names := make([]string, 0, len(bs))
+	names := make([]string, 0, len(bs)+len(OptInDetectorNames()))
 	for _, d := range bs {
 		names = append(names, d.Name())
 	}
+	names = append(names, OptInDetectorNames()...)
 	return names
 }

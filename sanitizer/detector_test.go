@@ -214,8 +214,9 @@ func TestReplaceWith_RewritesEachMatch(t *testing.T) {
 		t.Fatalf("want 1 match, got %d", len(matches))
 	}
 	out := ReplaceWith(s, matches, m)
-	if !strings.Contains(out, MakePlaceholder(1)) {
-		t.Errorf("replaced output %q missing placeholder", out)
+	ph := m.PutOrGet("AKIAIOSFODNN7EXAMPLE") // idempotent — same token
+	if !strings.Contains(out, ph) {
+		t.Errorf("replaced output %q missing placeholder %q", out, ph)
 	}
 	if strings.Contains(out, "AKIA") {
 		t.Errorf("real value leaked into replaced output: %q", out)
@@ -233,8 +234,9 @@ func TestReplaceWith_SameValueGetsSamePlaceholder(t *testing.T) {
 		t.Fatalf("want 2 matches, got %d", len(matches))
 	}
 	out := ReplaceWith(dups, matches, m)
-	if c := strings.Count(out, MakePlaceholder(1)); c != 2 {
-		t.Errorf("want both occurrences to use placeholder 001, got %d substitutions in %q", c, out)
+	ph := m.PutOrGet("AKIAIOSFODNN7EXAMPLE") // idempotent — same token
+	if c := strings.Count(out, ph); c != 2 {
+		t.Errorf("want both occurrences to use the same placeholder, got %d substitutions in %q", c, out)
 	}
 }
 

@@ -292,11 +292,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	uptime := time.Since(s.stats.startedAt)
 	s.stats.startedAtMu.RUnlock()
 	body := fmt.Sprintf(
-		`{"listen":%q,"upstream":%q,"uptime_seconds":%d,"requests":%d,"sanitised_requests":%d,"bytes_in":%d,"bytes_out":%d,"mapping_size":%d}`,
+		`{"listen":%q,"upstream":%q,"uptime_seconds":%d,"requests":%d,"sanitised_requests":%d,"bytes_in":%d,"bytes_out":%d,"mapping_size":%d,"mapping_evictions":%d}`,
 		s.cfg.Listen, s.cfg.UpstreamBase, int(uptime.Seconds()),
 		s.stats.requests.Load(), s.stats.sanitised.Load(),
 		s.stats.bytesIn.Load(), s.stats.bytesOut.Load(),
-		s.mapping.Size(),
+		s.mapping.Size(), s.mapping.Evictions(),
 	)
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write([]byte(body))
@@ -322,10 +322,10 @@ func (s *Server) pickProtocol(path string) Protocol {
 //  2. Pick a protocol by path; if matched, run RewriteRequest.
 //  3. Build an outbound *http.Request against the upstream base,
 //     copying method, headers (minus hop-by-hop), and the rewritten body.
-//  4. Stream the upstream response through StreamingReplacer back to
-//     the client. The replacer handles both buffered JSON responses
-//     and SSE streams identically — placeholders embedded in either
-//     get restored on the way out.
+//  4. Restore placeholders in the upstream response on the way back:
+//     SSE streams go through the structure-aware SSERestorer (decode each
+//     event, restore decoded display-text deltas), buffered JSON bodies
+//     through restoreResponseBytes; binary bodies are forwarded verbatim.
 func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	s.stats.requests.Add(1)
 
@@ -470,11 +470,17 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		decodedHere = true
 	}
 
-	// Binary / unknown-protocol responses bypass the placeholder
-	// replacer (image/audio/etc.): forwarding them verbatim avoids the
-	// per-chunk regex scan and any chance of binary that resembles our
-	// placeholder prefix being mangled.
-	sanitiseResponse := proto != nil && bodyLooksReplaceable(resp.Header.Get("Content-Type"))
+	// Only definitively-binary responses (image/audio/video/octet-stream)
+	// bypass the restorer and forward verbatim. Everything else —
+	// application/json and its +json / ndjson relatives, text/*, and
+	// unknown or missing content types — is scanned for placeholders.
+	// Restore is safe to over-apply: a token the proxy never minted can't
+	// be fabricated and simply passes through verbatim, so the gate fails
+	// TOWARD scanning. Crucially this no longer depends on the request
+	// path matching a protocol — a placeholder echoed on any path must
+	// still be restored.
+	respCT := resp.Header.Get("Content-Type")
+	sanitiseResponse := !isBinaryContentType(respCT)
 
 	// Copy response headers, skipping hop-by-hop. Drop Content-Encoding
 	// (we emit a decoded identity body; if absent this is a no-op).
@@ -497,13 +503,10 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 
 	flusher, _ := w.(http.Flusher)
 	if !sanitiseResponse {
-		// Binary / unknown-protocol response: forward bytes verbatim
-		// without running them through the placeholder replacer.
-		// Saves the per-chunk regex scan + carryover bookkeeping
-		// that would otherwise add latency to image / audio streams,
-		// and avoids any chance of the replacer being confused by
-		// binary that happens to contain bytes resembling our
-		// placeholder prefix.
+		// Binary response: forward bytes verbatim without scanning.
+		// Avoids per-chunk work on image/audio/video streams and any
+		// chance of binary that incidentally contains our placeholder
+		// prefix being mangled.
 		n, _ := io.Copy(w, respBody)
 		s.stats.bytesOut.Add(n)
 		if flusher != nil {
@@ -512,62 +515,103 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Stream the response body through the placeholder replacer.
-	replacer := NewStreamingReplacer(s.mapping)
-	buf := make([]byte, 16*1024)
-	for {
-		n, readErr := respBody.Read(buf)
-		if n > 0 {
-			out := replacer.Write(buf[:n])
-			if len(out) > 0 {
-				if _, werr := w.Write(out); werr != nil {
-					return
+	if isSSEContentType(respCT) {
+		// Server-Sent Events: restore incrementally so streaming latency
+		// is preserved (only a genuinely-pending partial placeholder is
+		// ever held back).
+		restorer := NewSSERestorer(s.mapping)
+		buf := make([]byte, 16*1024)
+		for {
+			n, readErr := respBody.Read(buf)
+			if n > 0 {
+				out := restorer.Write(buf[:n])
+				if len(out) > 0 {
+					if _, werr := w.Write(out); werr != nil {
+						return
+					}
+					s.stats.bytesOut.Add(int64(len(out)))
+					if flusher != nil {
+						flusher.Flush()
+					}
 				}
+			}
+			if readErr != nil {
+				break
+			}
+		}
+		if out := restorer.Final(); len(out) > 0 {
+			if _, werr := w.Write(out); werr == nil {
 				s.stats.bytesOut.Add(int64(len(out)))
 				if flusher != nil {
 					flusher.Flush()
 				}
 			}
 		}
-		if readErr != nil {
-			break
-		}
+		return
 	}
-	if out := replacer.Final(); len(out) > 0 {
-		_, _ = w.Write(out)
+
+	// Buffered (non-SSE) response: the structure-aware restorer needs the
+	// whole body to decode JSON and restore on the decoded string values.
+	// A body with no resolvable placeholder is returned byte-identical
+	// (no JSON re-normalisation), so a clean response is untouched.
+	full, rerr := io.ReadAll(respBody)
+	if rerr != nil && len(full) == 0 {
+		return
+	}
+	out := restoreResponseBytes(full, respCT, s.mapping)
+	if _, werr := w.Write(out); werr == nil {
 		s.stats.bytesOut.Add(int64(len(out)))
-		if flusher != nil {
-			flusher.Flush()
-		}
 	}
 }
 
-// bodyLooksReplaceable reports whether a Content-Type implies the
-// response body could contain text we'd want to placeholder-restore.
-// JSON and text/event-stream are the two shapes the protocols return;
-// everything else (binary images, audio, multipart) bypasses the
-// replacer entirely. An empty Content-Type defaults to "yes" — the
-// upstream may have omitted it and we'd rather scan harmless text
-// than miss a JSON body that forgot its header.
-func bodyLooksReplaceable(contentType string) bool {
+// normaliseContentType lowercases a Content-Type and strips its
+// parameters ("application/json; charset=utf-8" → "application/json").
+func normaliseContentType(contentType string) string {
 	ct := strings.ToLower(strings.TrimSpace(contentType))
-	if ct == "" {
-		return true
-	}
-	// Strip parameters ("application/json; charset=utf-8" → "application/json").
 	if i := strings.IndexByte(ct, ';'); i >= 0 {
 		ct = strings.TrimSpace(ct[:i])
 	}
+	return ct
+}
+
+// isBinaryContentType reports whether a response body is definitively
+// binary and must be forwarded verbatim (never scanned). Only these
+// families bypass the restorer; everything else — including unknown or
+// missing content types — is scanned, because over-applying restore is
+// safe (unknown tokens pass through verbatim) while under-applying it
+// forwards an un-restored placeholder to the SDK.
+func isBinaryContentType(contentType string) bool {
+	ct := normaliseContentType(contentType)
 	switch {
-	case strings.HasPrefix(ct, "application/json"):
+	case strings.HasPrefix(ct, "image/"):
 		return true
-	case ct == "text/event-stream":
+	case strings.HasPrefix(ct, "audio/"):
 		return true
-	case strings.HasPrefix(ct, "text/"):
-		// text/plain, text/html, text/csv — still text, still scannable.
+	case strings.HasPrefix(ct, "video/"):
+		return true
+	case ct == "application/octet-stream":
 		return true
 	}
 	return false
+}
+
+// isSSEContentType reports whether the response is a Server-Sent-Events
+// stream (restored incrementally).
+func isSSEContentType(contentType string) bool {
+	return strings.Contains(normaliseContentType(contentType), "event-stream")
+}
+
+// isNDJSONContentType reports whether the response is newline-delimited
+// JSON (one JSON value per line), restored line by line.
+func isNDJSONContentType(ct string) bool {
+	ct = normaliseContentType(ct)
+	switch ct {
+	case "application/x-ndjson", "application/ndjson",
+		"application/jsonl", "application/x-jsonl",
+		"application/json-lines", "application/x-json-stream":
+		return true
+	}
+	return strings.HasSuffix(ct, "+json-seq") || strings.Contains(ct, "ndjson") || strings.Contains(ct, "jsonl")
 }
 
 // upstreamClient is the shared HTTP client for outbound calls. Long

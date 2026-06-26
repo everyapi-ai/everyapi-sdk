@@ -5,53 +5,59 @@ import (
 	"testing"
 )
 
+// tok32 is a stand-in 32-hex placeholder token for tests that need a
+// well-formed-but-arbitrary token without minting one through a mapping.
+func tok32(c byte) string { return strings.Repeat(string(c), placeholderTokenLen) }
+
 func TestMakePlaceholder(t *testing.T) {
-	tests := []struct {
-		id   int
-		want string
-	}{
-		{1, "<<__EVERYAPI_SECRET_001__>>"},
-		{42, "<<__EVERYAPI_SECRET_042__>>"},
-		{999, "<<__EVERYAPI_SECRET_999__>>"},
-		{1000, "<<__EVERYAPI_SECRET_1000__>>"},
-		{12345, "<<__EVERYAPI_SECRET_12345__>>"},
-	}
-	for _, tc := range tests {
-		got := MakePlaceholder(tc.id)
-		if got != tc.want {
-			t.Errorf("MakePlaceholder(%d) = %q, want %q", tc.id, got, tc.want)
-		}
+	token := tok32('a')
+	want := "<<__EVERYAPI_SECRET_" + token + "__>>"
+	if got := MakePlaceholder(token); got != want {
+		t.Errorf("MakePlaceholder(%q) = %q, want %q", token, got, want)
 	}
 }
 
 func TestFindPlaceholders(t *testing.T) {
-	s := "hello <<__EVERYAPI_SECRET_001__>> and <<__EVERYAPI_SECRET_042__>> world"
+	p1 := MakePlaceholder(tok32('a'))
+	p2 := MakePlaceholder(tok32('b'))
+	s := "hello " + p1 + " and " + p2 + " world"
 	got := FindPlaceholders(s)
 	if len(got) != 2 {
 		t.Fatalf("want 2 placeholders, got %d (%v)", len(got), got)
 	}
-	if want := "<<__EVERYAPI_SECRET_001__>>"; s[got[0][0]:got[0][1]] != want {
-		t.Errorf("first span = %q, want %q", s[got[0][0]:got[0][1]], want)
+	if s[got[0][0]:got[0][1]] != p1 {
+		t.Errorf("first span = %q, want %q", s[got[0][0]:got[0][1]], p1)
 	}
-	if want := "<<__EVERYAPI_SECRET_042__>>"; s[got[1][0]:got[1][1]] != want {
-		t.Errorf("second span = %q, want %q", s[got[1][0]:got[1][1]], want)
+	if s[got[1][0]:got[1][1]] != p2 {
+		t.Errorf("second span = %q, want %q", s[got[1][0]:got[1][1]], p2)
 	}
 }
 
 func TestFindPlaceholders_None(t *testing.T) {
-	got := FindPlaceholders("nothing to see here")
-	if got != nil {
+	if got := FindPlaceholders("nothing to see here"); got != nil {
 		t.Errorf("want nil, got %v", got)
 	}
 }
 
+func TestFindPlaceholders_WrongBodyCharset(t *testing.T) {
+	// Old dense-numeric ids and non-hex bodies must NOT match the new
+	// regex — they're not tokens this scheme mints.
+	for _, body := range []string{"001", "999", strings.Repeat("g", 32), strings.Repeat("a", 31)} {
+		s := "x " + PlaceholderPrefix + body + PlaceholderSuffix + " y"
+		if got := FindPlaceholders(s); got != nil {
+			t.Errorf("body %q should not match placeholderRE, got %v", body, got)
+		}
+	}
+}
+
 func TestPartialAtTail_NoMatch(t *testing.T) {
+	full := MakePlaceholder(tok32('a'))
 	cases := []string{
 		"",
 		"hello world",
-		"<<__EVERYAPI_SECRET_001__>> done",        // complete, not partial
-		"this is not the prefix at all",
-		"<<__EVERYAPI_NOTSECRET_001__>>",         // literal text using our prefix-ish — not a real partial
+		full + " done",                  // complete, not partial
+		"this is not the prefix at all", // no prefix
+		PlaceholderPrefix + "hello world",
 	}
 	for _, s := range cases {
 		if got := PartialAtTail(s); got != -1 {
@@ -61,8 +67,7 @@ func TestPartialAtTail_NoMatch(t *testing.T) {
 }
 
 func TestPartialAtTail_PrefixPartial(t *testing.T) {
-	// Streaming has only delivered the start of the prefix.
-	full := PlaceholderPrefix + "001" + PlaceholderSuffix
+	full := MakePlaceholder(tok32('a'))
 	for end := 1; end < len(PlaceholderPrefix); end++ {
 		prefix := full[:end]
 		s := "lorem ipsum " + prefix
@@ -71,53 +76,53 @@ func TestPartialAtTail_PrefixPartial(t *testing.T) {
 			t.Errorf("PartialAtTail(%q) should detect partial prefix, got -1", s)
 			continue
 		}
-		// Index points to where the prefix starts
 		if got := s[idx:]; got != prefix {
 			t.Errorf("PartialAtTail(%q) idx=%d gives %q, want %q", s, idx, got, prefix)
 		}
 	}
 }
 
-func TestPartialAtTail_DigitsOnly(t *testing.T) {
-	s := "lorem " + PlaceholderPrefix + "12"
-	idx := PartialAtTail(s)
-	if idx != 6 {
-		t.Errorf("PartialAtTail(%q) = %d, want 6", s, idx)
+func TestPartialAtTail_TokenAccumulating(t *testing.T) {
+	// Prefix present, fewer than the full token's hex chars so far.
+	s := "lorem " + PlaceholderPrefix + "1a2b"
+	if got := PartialAtTail(s); got != 6 {
+		t.Errorf("PartialAtTail(%q) = %d, want 6", s, got)
 	}
 }
 
 func TestPartialAtTail_SuffixPartial(t *testing.T) {
-	// Prefix + digits + half of the closing `__>>`.
+	// Full token then a partial closing `__>>`.
 	for end := 1; end < len(PlaceholderSuffix); end++ {
-		s := "lorem " + PlaceholderPrefix + "42" + PlaceholderSuffix[:end]
-		idx := PartialAtTail(s)
-		if idx != 6 {
-			t.Errorf("PartialAtTail(%q) = %d, want 6", s, idx)
+		s := "lorem " + PlaceholderPrefix + tok32('c') + PlaceholderSuffix[:end]
+		if got := PartialAtTail(s); got != 6 {
+			t.Errorf("PartialAtTail(%q) = %d, want 6", s, got)
 		}
 	}
 }
 
-func TestPartialAtTail_LiteralAfterPrefixIsNotPartial(t *testing.T) {
-	// Our prefix appears but the body is non-digit non-suffix text:
-	// it's just an unrelated literal, no carryover needed.
-	s := "lorem " + PlaceholderPrefix + "hello world"
+func TestPartialAtTail_TokenDoneNoSuffix(t *testing.T) {
+	s := "x " + PlaceholderPrefix + tok32('d')
+	if got := PartialAtTail(s); got != 2 {
+		t.Errorf("PartialAtTail(%q) = %d, want 2", s, got)
+	}
+}
+
+func TestPartialAtTail_NonHexBeforeTokenDone(t *testing.T) {
+	// A non-hex byte before the token is full → not our placeholder.
+	s := "x " + PlaceholderPrefix + "1a2z" // 'z' is not hex
 	if got := PartialAtTail(s); got != -1 {
-		t.Errorf("PartialAtTail(%q) = %d, want -1 (literal, not a partial)", s, got)
+		t.Errorf("PartialAtTail(%q) = %d, want -1 (non-hex, not a partial)", s, got)
 	}
 }
 
 func TestPartialAtTail_CompletePlaceholderAtTailIsNotPartial(t *testing.T) {
-	// If the whole placeholder is there, it's a complete match — not
-	// a partial. The placeholderRE pass handles complete matches.
-	s := "lorem " + PlaceholderPrefix + "001" + PlaceholderSuffix
+	s := "lorem " + MakePlaceholder(tok32('a'))
 	if got := PartialAtTail(s); got != -1 {
 		t.Errorf("PartialAtTail(%q) = %d, want -1 (complete, not partial)", s, got)
 	}
 }
 
 func TestPlaceholderPrefixSuffixDistinct(t *testing.T) {
-	// Sanity: chosen brackets are sufficiently unusual that they
-	// don't appear in normal JSON or chat text.
 	if strings.Contains("{}\"\\n", PlaceholderPrefix) || strings.Contains("{}\"\\n", PlaceholderSuffix) {
 		t.Errorf("placeholder brackets collide with common JSON chars")
 	}

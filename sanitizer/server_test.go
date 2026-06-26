@@ -510,6 +510,165 @@ func TestServer_GzipResponseRestored(t *testing.T) {
 	}
 }
 
+// TestServer_RestoresEscapedJSONResponse is the realistic escaped-bracket
+// path: the upstream marshals its JSON response with the stdlib encoder
+// (which HTML-escapes the placeholder brackets), exactly like the gateway.
+// The structure-aware restorer must still resolve it.
+func TestServer_RestoresEscapedJSONResponse(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		idx := FindPlaceholders(string(body))
+		if len(idx) == 0 {
+			http.Error(w, "no placeholder", 400)
+			return
+		}
+		ph := string(body)[idx[0][0]:idx[0][1]]
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		// Marshal via the stdlib encoder → brackets become < / >.
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"reply": "the key is " + ph + " right?",
+		})
+	}))
+	defer upstream.Close()
+	base, _, stop := startServer(t, upstream.URL)
+	defer stop()
+
+	body := []byte(`{"messages":[{"role":"user","content":"secret AKIAIOSFODNN7EXAMPLE here"}]}`)
+	resp, err := http.Post(base+"/v1/messages", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(resp.Body)
+	if strings.Contains(string(out), PlaceholderPrefix) {
+		t.Errorf("escaped placeholder not restored: %s", out)
+	}
+	if !strings.Contains(string(out), "AKIAIOSFODNN7EXAMPLE") {
+		t.Errorf("real value not restored from escaped response: %s", out)
+	}
+}
+
+// TestServer_RestoresNDJSONResponse covers the P4 content-type gap: an
+// application/x-ndjson response previously bypassed the restorer.
+func TestServer_RestoresNDJSONResponse(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		idx := FindPlaceholders(string(body))
+		if len(idx) == 0 {
+			http.Error(w, "no placeholder", 400)
+			return
+		}
+		ph := string(body)[idx[0][0]:idx[0][1]]
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.WriteHeader(200)
+		fmt.Fprintf(w, "{\"result\":{\"text\":\"the key is %s ok\"}}\n", ph)
+	}))
+	defer upstream.Close()
+	base, _, stop := startServer(t, upstream.URL)
+	defer stop()
+
+	body := []byte(`{"messages":[{"role":"user","content":"secret AKIAIOSFODNN7EXAMPLE here"}]}`)
+	resp, err := http.Post(base+"/v1/messages/batches/x/results", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(resp.Body)
+	if strings.Contains(string(out), PlaceholderPrefix) {
+		t.Errorf("placeholder leaked in ndjson response: %s", out)
+	}
+	if !strings.Contains(string(out), "AKIAIOSFODNN7EXAMPLE") {
+		t.Errorf("real value not restored in ndjson response: %s", out)
+	}
+}
+
+// TestServer_RestoresPlusJSONResponse covers the +json suffix family
+// (application/vnd.api+json, application/problem+json).
+func TestServer_RestoresPlusJSONResponse(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		idx := FindPlaceholders(string(body))
+		if len(idx) == 0 {
+			http.Error(w, "no placeholder", 400)
+			return
+		}
+		ph := string(body)[idx[0][0]:idx[0][1]]
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.WriteHeader(200)
+		fmt.Fprintf(w, `{"data":{"text":"the key is %s ok"}}`, ph)
+	}))
+	defer upstream.Close()
+	base, _, stop := startServer(t, upstream.URL)
+	defer stop()
+
+	body := []byte(`{"messages":[{"role":"user","content":"secret AKIAIOSFODNN7EXAMPLE here"}]}`)
+	resp, err := http.Post(base+"/v1/messages", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(resp.Body)
+	if strings.Contains(string(out), PlaceholderPrefix) {
+		t.Errorf("placeholder leaked in +json response: %s", out)
+	}
+	if !strings.Contains(string(out), "AKIAIOSFODNN7EXAMPLE") {
+		t.Errorf("real value not restored in +json response: %s", out)
+	}
+}
+
+// TestServer_RestoresOnNonProtocolPath covers the defect where restore was
+// gated on the request path matching a protocol: a placeholder echoed on a
+// path the proxy doesn't recognise must still be restored, because the
+// mapping is process-global.
+func TestServer_RestoresOnNonProtocolPath(t *testing.T) {
+	var captured string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if r.URL.Path == "/v1/messages" {
+			if idx := FindPlaceholders(string(body)); len(idx) > 0 {
+				captured = string(body)[idx[0][0]:idx[0][1]]
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+			return
+		}
+		// A path no protocol claims: echo the previously-minted placeholder.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		fmt.Fprintf(w, `{"echo":"value %s end"}`, captured)
+	}))
+	defer upstream.Close()
+	base, _, stop := startServer(t, upstream.URL)
+	defer stop()
+
+	// 1. Mint a placeholder on a protocol path.
+	mint := []byte(`{"messages":[{"role":"user","content":"secret AKIAIOSFODNN7EXAMPLE here"}]}`)
+	resp1, err := http.Post(base+"/v1/messages", "application/json", bytes.NewReader(mint))
+	if err != nil {
+		t.Fatalf("mint post: %v", err)
+	}
+	resp1.Body.Close()
+	if captured == "" {
+		t.Fatalf("upstream never saw a placeholder to echo")
+	}
+
+	// 2. Hit a non-protocol path whose response carries that placeholder.
+	resp2, err := http.Get(base + "/v1/foo/bar")
+	if err != nil {
+		t.Fatalf("non-proto get: %v", err)
+	}
+	defer resp2.Body.Close()
+	out, _ := io.ReadAll(resp2.Body)
+	if strings.Contains(string(out), PlaceholderPrefix) {
+		t.Errorf("placeholder not restored on non-protocol path: %s", out)
+	}
+	if !strings.Contains(string(out), "AKIAIOSFODNN7EXAMPLE") {
+		t.Errorf("real value not restored on non-protocol path: %s", out)
+	}
+}
+
 func TestServer_NonJSONOnSanitisablePathWarns(t *testing.T) {
 	var logbuf bytes.Buffer
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

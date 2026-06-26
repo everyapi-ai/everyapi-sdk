@@ -11,9 +11,9 @@ import "strings"
 //   - messages[].content                — flat string body
 //   - messages[].content[].text         — content-blocks variant
 //   - messages[].tool_calls[].function.arguments — stringified JSON
-//                                          arguments the model emitted;
-//                                          can carry user-pasted secrets
-//                                          on follow-up turns
+//     arguments the model emitted;
+//     can carry user-pasted secrets
+//     on follow-up turns
 //   - messages[].name                   — user-supplied speaker label
 //   - tools[].function.description      — pinned in the prompt
 //   - tools[].function.parameters … strings nested arbitrarily deep
@@ -47,13 +47,15 @@ func (p *OpenAIProtocol) PathMatch(path string) bool {
 // surfaces in OpenAI's spec — schema-driven rather than path-driven
 // to stay robust against minor API revisions.
 var openaiTextKeys = map[string]bool{
-	"content":       true, // messages[].content (string variant) and content-blocks[].text-via-walkJSON
-	"text":          true, // content-blocks[].text and tools[].input_schema descriptions occasionally
-	"arguments":     true, // tool_calls[].function.arguments (stringified JSON, scanned as-is)
-	"description":   true, // tools[].function.description, schemas
-	"name":          true, // messages[].name
-	"input":         true, // embeddings input string
-	"instructions":  true, // /v1/responses
+	"content":      true, // messages[].content (string variant) and content-blocks[].text-via-walkJSON
+	"text":         true, // content-blocks[].text and tools[].input_schema descriptions occasionally
+	"arguments":    true, // tool_calls[].function.arguments (stringified JSON, scanned as-is)
+	"description":  true, // tools[].function.description, schemas
+	"input":        true, // embeddings input string
+	"instructions": true, // /v1/responses
+	// "name" is deliberately NOT scanned: it's a routing identifier
+	// (function name / speaker label). Masking it corrupts the tool schema
+	// and can 400 the request (placeholder-in-function-name).
 }
 
 func (p *OpenAIProtocol) RewriteRequest(body []byte, detectors []Detector, m *Mapping) ([]byte, error) {

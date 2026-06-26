@@ -39,7 +39,8 @@ func (p *GeminiProtocol) PathMatch(path string) bool {
 var geminiTextKeys = map[string]bool{
 	"text":        true, // parts[].text
 	"description": true, // functionDeclarations[].description, schema descriptions
-	"name":        true, // tool names
+	// "name" is deliberately NOT scanned: it's a routing identifier
+	// (function declaration name). Masking it corrupts the tool schema.
 }
 
 func (p *GeminiProtocol) RewriteRequest(body []byte, detectors []Detector, m *Mapping) ([]byte, error) {

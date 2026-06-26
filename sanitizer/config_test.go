@@ -79,16 +79,60 @@ func TestBuildDetectors_NilReceiver(t *testing.T) {
 }
 
 func TestBuildDetectors_DisableFilters(t *testing.T) {
-	fc := &FileConfig{Disabled: []string{DetectorChineseID, DetectorLuhnCreditCard}}
+	fc := &FileConfig{Disabled: []string{DetectorGroqKey, DetectorSlackToken}}
 	got := fc.BuildDetectors()
 	for _, d := range got {
-		if d.Name() == DetectorChineseID || d.Name() == DetectorLuhnCreditCard {
+		if d.Name() == DetectorGroqKey || d.Name() == DetectorSlackToken {
 			t.Errorf("disabled detector %q still active", d.Name())
 		}
 	}
-	// Built-in count minus 2 — plus 0 custom.
+	// Default-on count minus 2 — plus 0 custom, 0 opt-in.
 	if len(got) != len(BuiltinDetectors())-2 {
 		t.Errorf("len after disable = %d, want %d", len(got), len(BuiltinDetectors())-2)
+	}
+}
+
+func TestBuildDetectors_OptInOffByDefault(t *testing.T) {
+	var fc *FileConfig
+	got := fc.BuildDetectors()
+	for _, d := range got {
+		if d.Name() == DetectorLuhnCreditCard || d.Name() == DetectorChineseID {
+			t.Errorf("opt-in numeric detector %q active without being enabled", d.Name())
+		}
+	}
+}
+
+func TestBuildDetectors_OptInEnabled(t *testing.T) {
+	fc := &FileConfig{Enabled: []string{DetectorLuhnCreditCard}}
+	got := fc.BuildDetectors()
+	found := false
+	for _, d := range got {
+		if d.Name() == DetectorLuhnCreditCard {
+			found = true
+		}
+		if d.Name() == DetectorChineseID {
+			t.Errorf("chinese_id enabled when only luhn was requested")
+		}
+	}
+	if !found {
+		t.Errorf("explicitly-enabled luhn detector missing from set")
+	}
+	// Enabled count = default-on + 1 opt-in.
+	if len(got) != len(BuiltinDetectors())+1 {
+		t.Errorf("len with one opt-in = %d, want %d", len(got), len(BuiltinDetectors())+1)
+	}
+}
+
+func TestBuildDetectors_EnabledButDisabledStaysOff(t *testing.T) {
+	// Disabled wins over Enabled for the same detector.
+	fc := &FileConfig{
+		Enabled:  []string{DetectorLuhnCreditCard},
+		Disabled: []string{DetectorLuhnCreditCard},
+	}
+	for _, d := range fc.BuildDetectors() {
+		if d.Name() == DetectorLuhnCreditCard {
+			t.Errorf("detector both enabled and disabled should stay OFF")
+		}
 	}
 }
 
@@ -121,12 +165,23 @@ func TestBuildDetectors_UnknownDisabledIgnored(t *testing.T) {
 
 func TestAllBuiltinNames(t *testing.T) {
 	names := AllBuiltinNames()
-	if len(names) != len(BuiltinDetectors()) {
-		t.Errorf("AllBuiltinNames len = %d, want %d", len(names), len(BuiltinDetectors()))
+	want := len(BuiltinDetectors()) + len(OptInDetectorNames())
+	if len(names) != want {
+		t.Errorf("AllBuiltinNames len = %d, want %d", len(names), want)
 	}
 	for _, n := range names {
 		if n == "" {
 			t.Errorf("empty detector name in list: %v", names)
+		}
+	}
+	// Opt-in detectors must be listed (so the configure UI can show them).
+	set := map[string]bool{}
+	for _, n := range names {
+		set[n] = true
+	}
+	for _, n := range OptInDetectorNames() {
+		if !set[n] {
+			t.Errorf("opt-in detector %q missing from AllBuiltinNames", n)
 		}
 	}
 }

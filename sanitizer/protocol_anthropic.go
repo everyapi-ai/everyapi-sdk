@@ -10,7 +10,7 @@ import "strings"
 // Sanitisable text fields:
 //
 //   - system               — string or array of content blocks (some
-//                            clients pass an array; we cover both via walkJSON)
+//     clients pass an array; we cover both via walkJSON)
 //   - messages[].content   — string or array of content blocks
 //   - content[].text       — text block body
 //   - content[].input      — tool_use input (stringified JSON arguments)
@@ -46,7 +46,9 @@ var anthropicTextKeys = map[string]bool{
 	"input":       true, // content[].input (tool_use args)
 	"description": true, // tools[].description, schemas
 	"system":      true, // top-level system string form
-	"name":        true, // tools[].name (rarely sensitive but cheap)
+	// "name" is deliberately NOT scanned: it's a routing identifier
+	// (tool name / speaker label). Masking it corrupts the tool schema and
+	// can 400 the request (placeholder-in-function-name).
 }
 
 func (p *AnthropicProtocol) RewriteRequest(body []byte, detectors []Detector, m *Mapping) ([]byte, error) {

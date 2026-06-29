@@ -26,10 +26,16 @@ type SellerChannel struct {
 	Type   int    `json:"type"`
 	Status int    `json:"status"`
 	Models string `json:"models"`
-	// Group / TestModel / etc. are omitted intentionally — adding
-	// them later is non-breaking because the field is `omitempty`
-	// on the backend, so a missing key in the response doesn't
-	// trigger a decode error.
+	// Editable fields the `seller update` read-modify-write must preserve.
+	// The list endpoint already returns them (only the credential Key is
+	// zeroed server-side), so decoding them here lets an update seed `req`
+	// from the current row and overlay only the changed flags — instead of
+	// blanking whatever the caller didn't re-supply. Group / owner / etc.
+	// stay omitted (not editable via seller update).
+	Remark        string `json:"remark"`
+	TestModel     string `json:"test_model"`
+	ModelMapping  string `json:"model_mapping"`
+	StatusCodeMap string `json:"status_code_mapping"`
 }
 
 // ListSellerChannels hits GET /api/seller/channel and returns the

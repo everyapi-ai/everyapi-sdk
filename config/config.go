@@ -157,11 +157,30 @@ func Save(c *Credentials) error {
 	if err != nil {
 		return fmt.Errorf("marshal credentials: %w", err)
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	// Unique temp name (not a fixed "credentials.json.tmp") so two everyapi
+	// processes writing credentials concurrently can't share one temp file
+	// and rename a half-written one over the real credentials.
+	f, err := os.CreateTemp(dir, "credentials.json.tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp credentials: %w", err)
+	}
+	tmp := f.Name()
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(tmp)
 		return fmt.Errorf("write credentials: %w", err)
 	}
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return fmt.Errorf("chmod credentials: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("close temp credentials: %w", err)
+	}
 	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
 		return fmt.Errorf("rename credentials: %w", err)
 	}
 	return nil

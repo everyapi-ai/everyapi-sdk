@@ -62,7 +62,13 @@ func ResolveRelayKey(ctx context.Context, creds *config.Credentials, group strin
 		return "", errors.New("not signed in")
 	}
 	if group == "" && creds.RelayKey != "" {
-		if key, ok := refreshRelayKeyIfNeeded(ctx, creds); ok {
+		if key, ok, saveErr := refreshRelayKeyIfNeeded(ctx, creds); ok {
+			if saveErr != nil {
+				// Key rotated but couldn't be persisted — return the fresh key
+				// paired with *ErrCacheSave so the caller completes the action
+				// and can warn instead of silently losing the rotated key.
+				return key, &ErrCacheSave{Err: saveErr}
+			}
 			return key, nil
 		}
 		return creds.RelayKey, nil
@@ -114,16 +120,16 @@ func ResolveRelayKey(ctx context.Context, creds *config.Credentials, group strin
 // nothing to renew (legacy/manual creds with no refresh material) or the
 // refresh failed — the caller then uses the cached key, which is either still
 // valid or prompts a re-login on the next API rejection.
-func refreshRelayKeyIfNeeded(ctx context.Context, creds *config.Credentials) (string, bool) {
+func refreshRelayKeyIfNeeded(ctx context.Context, creds *config.Credentials) (string, bool, error) {
 	if creds.RefreshToken == "" || creds.OAuthClientID == "" || creds.RelayKeyExpiresAt == 0 {
-		return "", false
+		return "", false, nil
 	}
 	if time.Until(time.Unix(creds.RelayKeyExpiresAt, 0)) > relayKeyRefreshSkew {
-		return "", false
+		return "", false, nil
 	}
 	tok, err := New(creds.APIBase, "").OAuth2Refresh(ctx, creds.OAuthClientID, creds.RefreshToken)
 	if err != nil {
-		return "", false
+		return "", false, nil
 	}
 	// In OAuth2 mode the relay key is also the stored access token; keep both in
 	// sync so management-less commands that read AccessToken see the fresh key.
@@ -131,6 +137,9 @@ func refreshRelayKeyIfNeeded(ctx context.Context, creds *config.Credentials) (st
 	creds.AccessToken = tok.AccessToken
 	creds.RefreshToken = tok.RefreshToken
 	creds.RelayKeyExpiresAt = tok.ExpiresAt
-	_ = config.Save(creds)
-	return tok.AccessToken, true
+	// Surface a persist failure instead of swallowing it: the key just
+	// rotated, so a dropped Save means a re-refresh next run (or use of a
+	// stale cached key). The caller pairs this with *ErrCacheSave.
+	saveErr := config.Save(creds)
+	return tok.AccessToken, true, saveErr
 }

@@ -1,8 +1,9 @@
 // Performance-metrics SDK: GET /api/perf-metrics/summary. A per-model
 // rollup (latency / success rate / throughput) of the gateway's own
 // relay traffic — complements GetUpstreamStatus (provider-side health).
-// The endpoint is TryUserAuth (login optional); the summary is a global
-// aggregate, so an empty bearer works.
+// The endpoint is admin-only (it exposes internal upstream channel
+// topology and runs heavy log scans), so callers must pass admin
+// credentials; an empty bearer is rejected with 401.
 package api
 
 import (

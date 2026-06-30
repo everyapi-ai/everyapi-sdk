@@ -83,11 +83,30 @@ func SaveSettings(s *Settings) error {
 	if err != nil {
 		return fmt.Errorf("marshal settings: %w", err)
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	// Unique temp name (not a fixed "settings.json.tmp") so concurrent
+	// everyapi processes can't share one temp file and rename a half-written
+	// one over the real settings; remove the temp on any error path.
+	f, err := os.CreateTemp(dir, "settings.json.tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp settings: %w", err)
+	}
+	tmp := f.Name()
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(tmp)
 		return fmt.Errorf("write settings: %w", err)
 	}
+	if err := f.Chmod(0o644); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return fmt.Errorf("chmod settings: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("close temp settings: %w", err)
+	}
 	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
 		return fmt.Errorf("rename settings: %w", err)
 	}
 	return nil

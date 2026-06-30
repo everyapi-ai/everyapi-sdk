@@ -65,7 +65,7 @@ func TestRefreshChannelCredential(t *testing.T) {
 				t.Errorf("path = %q", r.URL.Path)
 			}
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"success":true,"data":{"channel_id":9,"channel_type":"claude","email":"u@x.com","expires_at":1700000000,"last_refresh":1700000050}}`))
+			w.Write([]byte(`{"success":true,"data":{"channel_id":9,"channel_type":"claude","email":"u@x.com","expires_at":"2024-12-31T23:59:59Z","last_refresh":"2024-12-31T22:00:00Z"}}`))
 		}))
 		defer srv.Close()
 		res, err := New(srv.URL, "acc").WithUserID(7).RefreshChannelCredential(context.Background(), 9, "claude")
@@ -74,6 +74,11 @@ func TestRefreshChannelCredential(t *testing.T) {
 		}
 		if res.ChannelID != 9 || res.Email != "u@x.com" {
 			t.Errorf("got %+v", res)
+		}
+		// Backend returns RFC3339 strings, not Unix ints — decoding them must
+		// not error (the bug) and the values must round-trip.
+		if res.ExpiresAt != "2024-12-31T23:59:59Z" || res.LastRefresh != "2024-12-31T22:00:00Z" {
+			t.Errorf("RFC3339 timestamps not decoded: %+v", res)
 		}
 	})
 }

@@ -3,6 +3,7 @@ package sanitizer
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"strings"
 )
 
@@ -16,6 +17,7 @@ import (
 var restoreForbiddenKeys = map[string]bool{
 	"input":        true, // Anthropic tool_use input (tool arguments object)
 	"arguments":    true, // OpenAI tool_calls[].function.arguments (stringified)
+	"args":         true, // Gemini functionCall.args (tool arguments object)
 	"partial_json": true, // streaming tool-arg delta fragment
 }
 
@@ -105,31 +107,80 @@ func restoreBufferedJSON(body []byte, m *Mapping) []byte {
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.UseNumber()
 	var root any
-	if err := dec.Decode(&root); err != nil || dec.More() {
-		// Not a single clean JSON value (parse error, or trailing data
-		// such as un-labelled ndjson). Fall back to a raw text restore on
-		// the whole body so we never drop bytes; still byte-identical when
-		// nothing matches.
-		if s, changed := restoreInText(string(body), m); changed {
-			return []byte(s)
+	err := dec.Decode(&root)
+	if err == nil && !dec.More() {
+		// Single clean JSON value — the structure-aware path that honors
+		// restoreForbiddenKeys (never rehydrates a secret into a tool-arg sink).
+		var changed bool
+		if s, ok := root.(string); ok {
+			ns, c := restoreInText(s, m)
+			root, changed = ns, c
+		} else {
+			root, changed = restoreJSONValue(root, m)
+		}
+		if !changed {
+			return body
+		}
+		out, eerr := encodeJSONNoHTMLEscape(root)
+		if eerr != nil {
+			return body
+		}
+		return out
+	}
+	if err == nil {
+		// Decoded one value but trailing data follows (concatenated JSON
+		// values / un-labelled ndjson). Restore EACH value through the
+		// forbidden-key-aware walker — NOT a blanket raw-text restore, which
+		// would rehydrate secrets into tool-argument sinks (the P3 guard only
+		// lives in restoreJSONValue, not restoreInText).
+		dec2 := json.NewDecoder(bytes.NewReader(body))
+		dec2.UseNumber()
+		var parts [][]byte
+		ok := true
+		anyChanged := false
+		for {
+			var v any
+			derr := dec2.Decode(&v)
+			if derr == io.EOF {
+				break
+			}
+			if derr != nil {
+				ok = false
+				break
+			}
+			// Mirror the single-value path: a top-level string is display text
+			// (restoreInText); composites go through the forbidden-key walker.
+			var nv any
+			var c bool
+			if s, isStr := v.(string); isStr {
+				nv, c = restoreInText(s, m)
+			} else {
+				nv, c = restoreJSONValue(v, m)
+			}
+			if c {
+				anyChanged = true
+			}
+			enc, eerr := encodeJSONNoHTMLEscape(nv)
+			if eerr != nil {
+				ok = false
+				break
+			}
+			parts = append(parts, enc)
+		}
+		// Re-emit only when a placeholder actually resolved; otherwise return
+		// the body byte-for-byte so key order / framing / any upstream cache
+		// key are preserved (this file's documented contract). A mid-body
+		// decode failure also falls through to the verbatim return.
+		if ok && anyChanged {
+			return bytes.Join(parts, []byte("\n"))
 		}
 		return body
 	}
-	var changed bool
-	if s, ok := root.(string); ok {
-		ns, c := restoreInText(s, m)
-		root, changed = ns, c
-	} else {
-		root, changed = restoreJSONValue(root, m)
-	}
-	if !changed {
-		return body
-	}
-	out, err := encodeJSONNoHTMLEscape(root)
-	if err != nil {
-		return body
-	}
-	return out
+	// Malformed / undecodable body: a raw restoreInText here is blind to
+	// forbidden-key sinks, so a real secret could be rehydrated into a tool
+	// argument. For a privacy proxy the safe direction is to NOT restore —
+	// leave the visible placeholders in place.
+	return body
 }
 
 // restoreNDJSON restores a newline-delimited JSON body (application/

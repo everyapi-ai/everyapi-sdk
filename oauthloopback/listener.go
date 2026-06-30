@@ -39,9 +39,11 @@ type Result struct {
 
 // Listener owns a net.Listener on a random loopback port + a
 // http.Server hooked to a single handler that captures the OAuth
-// callback. The lifecycle is one-shot: caller starts it, waits on
-// Wait, then closes. A second Wait or a Wait after Close returns
-// promptly so the caller can defer Close unconditionally.
+// callback. The lifecycle is strictly one-shot: the caller starts it,
+// calls Wait EXACTLY once, then closes (defer Close after the single
+// Wait is the intended pattern). Wait is not re-entrant — a second Wait
+// blocks on its own context because the result channel is drained by the
+// first call.
 type Listener struct {
 	server *http.Server
 	addr   string
@@ -107,9 +109,10 @@ func (l *Listener) URL() string {
 func (l *Listener) Port() int { return l.port }
 
 // Wait blocks until either the callback handler captures a result OR
-// the context is cancelled. The first Wait wins; subsequent Wait
-// calls return immediately with the same Result (re-reading from a
-// closed channel yields the zero value, so we re-deliver explicitly).
+// the context is cancelled. It is single-shot: the result is delivered
+// over a channel and consumed by this one call, so a second Wait would
+// block on its own context (there is no re-delivery). Call it exactly
+// once and defer Close after it.
 func (l *Listener) Wait(ctx context.Context) (Result, error) {
 	select {
 	case <-ctx.Done():

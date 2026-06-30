@@ -92,12 +92,31 @@ func SaveFileConfig(fc *FileConfig) error {
 	if err != nil {
 		return fmt.Errorf("marshal sanitizer config: %w", err)
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, body, 0o600); err != nil {
+	// Unique temp name (not a fixed "sanitizer.json.tmp") so concurrent
+	// everyapi processes writing the sanitizer config can't share one temp
+	// file and rename a half-written one over the real config; remove the
+	// temp on any error path. (Mirrors config.Save / SaveSettings.)
+	f, err := os.CreateTemp(filepath.Dir(path), "sanitizer.json.tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp sanitizer config: %w", err)
+	}
+	tmp := f.Name()
+	if _, err := f.Write(body); err != nil {
+		f.Close()
+		os.Remove(tmp)
 		return fmt.Errorf("write sanitizer config: %w", err)
 	}
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return fmt.Errorf("chmod sanitizer config: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("close temp sanitizer config: %w", err)
+	}
 	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
+		os.Remove(tmp)
 		return fmt.Errorf("rename sanitizer config: %w", err)
 	}
 	return nil

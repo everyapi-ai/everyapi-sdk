@@ -39,6 +39,8 @@ func (p *GeminiProtocol) PathMatch(path string) bool {
 var geminiTextKeys = map[string]bool{
 	"text":        true, // parts[].text
 	"description": true, // functionDeclarations[].description, schema descriptions
+	"args":        true, // functionCall.args — tool-call arguments; mask outbound like OpenAI `arguments` / Anthropic `input`
+	"response":    true, // functionResponse.response — tool result, parity with Anthropic tool_result scanning
 	// "name" is deliberately NOT scanned: it's a routing identifier
 	// (function declaration name). Masking it corrupts the tool schema.
 }

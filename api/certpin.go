@@ -42,12 +42,15 @@ import (
 // the official hosts are expected to present.
 //
 // Only api.everyapi.ai is pinned: that is the ONLY host the CLI's
-// pinned transport actually TLS-dials (the sanitizer proxy forwards
-// there too). app.everyapi.ai / everyapi.ai are opened in the user's
-// browser via cliprompt.OpenBrowser(), not through this http.Client, so a pin
-// for them would never be exercised by inspect() — pinning only what
-// is actually verified keeps the set honest and avoids shipping
-// config no smoke test can reach.
+// pinned transport actually TLS-dials. app.everyapi.ai / everyapi.ai are
+// opened in the user's browser via cliprompt.OpenBrowser(), not through
+// this http.Client, so a pin for them would never be exercised by
+// inspect() — pinning only what is actually verified keeps the set
+// honest and avoids shipping config no smoke test can reach. The
+// sanitizer proxy's upstreamClient (clients/sdk/sanitizer/server.go) is a
+// SEPARATE, deliberately unpinned transport: it forwards to third-party
+// AI providers (OpenAI / Anthropic / Gemini), whose certificates the
+// gateway cannot pin — so cert pinning here does NOT cover that path.
 //
 // Captured 2026-06-23 from the live k8s ingress, which serves a Google
 // Trust Services chain:  leaf  <  WE1 intermediate  <  GTS Root R4.

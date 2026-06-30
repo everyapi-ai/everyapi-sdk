@@ -13,6 +13,17 @@ import (
 // malicious/buggy upstream could otherwise OOM the proxy).
 const maxCarry = 1024
 
+// maxFrameBytes bounds the raw event-frame accumulator. An upstream that
+// never emits an event boundary (\n\n) would otherwise grow r.frame without
+// limit; past this we flush the buffered bytes and reset rather than OOM.
+const maxFrameBytes = 4 << 20 // 4 MiB
+
+// geminiPartStride spaces out the per-(candidate,part) carryover slot keys
+// for Gemini events so two text parts in one candidate — or multiple
+// candidates that omit the index field — never collide in the pending/tmpl
+// maps. A candidate realistically never holds 65536 parts.
+const geminiPartStride = 1 << 16
+
 // SSERestorer is a structure-aware Server-Sent-Events restorer. It
 // reframes the line-oriented `data: {json}\n\n` event stream, decodes
 // each event's JSON, and restores placeholders on the DECODED text of
@@ -56,6 +67,15 @@ func (r *SSERestorer) Write(p []byte) []byte {
 		raw := r.frame[:end]
 		r.frame = r.frame[end:]
 		out = append(out, r.processRawEvent(raw)...)
+	}
+	// Bound the accumulator: an upstream that never emits an event boundary
+	// (\n\n) would otherwise grow r.frame without limit and OOM the proxy.
+	// Past the cap, forward the buffered bytes as-is — there's no event
+	// structure to safely restore, so leaving placeholders is the safe
+	// direction — and reset.
+	if len(r.frame) > maxFrameBytes {
+		out = append(out, r.frame...)
+		r.frame = r.frame[:0]
 	}
 	return out
 }
@@ -309,6 +329,51 @@ func displaySlots(obj map[string]any) []textSlot {
 						idx: cidx,
 						get: func() string { s, _ := d["content"].(string); return s },
 						set: func(v string) { d["content"] = v },
+					})
+				}
+			}
+		}
+	}
+
+	// Gemini streamGenerateContent: candidates[].content.parts[].text. Skip
+	// parts carrying a functionCall — that's the tool-arg sink (P3), handled
+	// like Anthropic input_json_delta / OpenAI tool_calls (never restored).
+	if cands, ok := obj["candidates"].([]any); ok {
+		for ci, c := range cands {
+			cm, ok := c.(map[string]any)
+			if !ok {
+				continue
+			}
+			content, ok := cm["content"].(map[string]any)
+			if !ok {
+				continue
+			}
+			parts, ok := content["parts"].([]any)
+			if !ok {
+				continue
+			}
+			for pi, p := range parts {
+				pm, ok := p.(map[string]any)
+				if !ok {
+					continue
+				}
+				if _, isFC := pm["functionCall"]; isFC {
+					continue
+				}
+				if _, ok := pm["text"].(string); ok {
+					d := pm
+					// Carryover slot key MUST be unique per (candidate, part):
+					// a single event can carry two text parts in one candidate
+					// (thought + answer), and multiple candidates often omit the
+					// index field — keying by the index field alone collapses
+					// them to one slot and bleeds one part's split-placeholder
+					// tail into another. Use array positions (stable across
+					// chunks). Gemini has no content_block_stop, so these flush
+					// at stream end via flushAll.
+					slots = append(slots, textSlot{
+						idx: ci*geminiPartStride + pi,
+						get: func() string { s, _ := d["text"].(string); return s },
+						set: func(v string) { d["text"] = v },
 					})
 				}
 			}

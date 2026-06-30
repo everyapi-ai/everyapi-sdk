@@ -83,8 +83,8 @@ func (c *Client) DeleteSellerChannel(ctx context.Context, id int) error {
 // — only `account_id` / `email` may be empty for providers that
 // don't expose them.
 type ChannelRefreshResult struct {
-	ExpiresAt   int64  `json:"expires_at"`
-	LastRefresh int64  `json:"last_refresh"`
+	ExpiresAt   string `json:"expires_at"`   // RFC3339 timestamp string from the backend
+	LastRefresh string `json:"last_refresh"` // RFC3339 timestamp string from the backend
 	AccountID   string `json:"account_id"`
 	Email       string `json:"email"`
 	ChannelID   int    `json:"channel_id"`

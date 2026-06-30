@@ -83,6 +83,7 @@ var binaryExcludeKeys = map[string]bool{
 var numericExcludeKeys = map[string]bool{
 	"input":     true, // tool_use input arguments
 	"arguments": true, // tool_calls function arguments
+	"args":      true, // Gemini functionCall.args (tool arguments)
 	"default":   true, // JSON-schema default
 	"enum":      true, // JSON-schema enum
 	"const":     true, // JSON-schema const

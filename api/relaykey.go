@@ -114,6 +114,43 @@ func ResolveRelayKey(ctx context.Context, creds *config.Credentials, group strin
 	return key, nil
 }
 
+// InvalidateCachedRelayKey clears the cached default-group relay key
+// (creds.RelayKey) and persists, so the next default-group
+// ResolveRelayKey re-picks the newest *enabled* token instead of
+// re-handing-out a key the gateway just rejected. Call it when a relay
+// request authenticated with the cached key comes back definitively
+// 401/unauthorized (the token was disabled, revoked, expired, or ran
+// out of quota server-side) — the default-group cache otherwise has no
+// way to learn its key died and keeps returning it on every run.
+//
+// No-op when nothing is cached. The in-memory creds.RelayKey is cleared
+// before the persist attempt, so even if Save fails the current process
+// won't reuse the dead key; the returned Save error lets the caller
+// warn that the on-disk cache couldn't be cleared.
+//
+// Only invalidate when the rejected key WAS the default-group cache —
+// a group-scoped key is resolved fresh and never cached, so its
+// rejection must not wipe an unrelated (possibly still-valid) default
+// cache. That gating is the caller's responsibility.
+func InvalidateCachedRelayKey(creds *config.Credentials) error {
+	if creds == nil || creds.RelayKey == "" {
+		return nil
+	}
+	// OAuth2 mode: the cached relay key IS the OAuth access token (see
+	// refreshRelayKeyIfNeeded keeping RelayKey == AccessToken in sync), and a
+	// 401 there means "the access token needs refreshing", not "the cache is
+	// poisoned". Clearing it would strand the next run — with RelayKey empty,
+	// ResolveRelayKey skips the OAuth refresh branch and falls to a management
+	// ListTokens call that, for an OAuth2 login (UserID often 0), 401s and
+	// forces a full browser re-login even after the user fixes the cause (e.g.
+	// tops up quota). Leave it for the next-run refresh to rotate.
+	if creds.RefreshToken != "" && creds.OAuthClientID != "" {
+		return nil
+	}
+	creds.RelayKey = ""
+	return config.Save(creds)
+}
+
 // refreshRelayKeyIfNeeded proactively renews an OAuth2-issued relay key that's
 // within relayKeyRefreshSkew of expiry, updating + persisting creds in place.
 // Returns (newKey, true) only on a successful refresh; (—, false) when there's

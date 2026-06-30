@@ -59,6 +59,13 @@ const (
 	// backend's 30s cadence — enough buffer for a brief network
 	// stutter without leaving a wedged TCP socket open for minutes.
 	idleDeadline = 90 * time.Second
+	// maxEventBytes bounds the per-event data accumulator. A server that
+	// streams `data:` lines without ever emitting the blank-line event
+	// boundary would otherwise grow dataLines without limit and OOM the
+	// client. Past this cap we tear the connection down (the outer loop
+	// reconnects) rather than buffer unbounded — mirrors the maxFrameBytes
+	// guard in sanitizer/sse.go.
+	maxEventBytes = 1 << 20 // 1 MiB
 )
 
 // SubscribeEvents opens a long-lived SSE connection at
@@ -181,6 +188,7 @@ func parseSSE(ctx context.Context, body io.Reader, out chan<- Event) error {
 	var (
 		eventName string
 		dataLines []string
+		dataBytes int // running size of dataLines, bounded by maxEventBytes
 	)
 	// Use a timer to enforce the idle deadline. Reset on every line
 	// read (data OR heartbeat-comment line "data:" with a numeric
@@ -255,12 +263,22 @@ func parseSSE(ctx context.Context, body io.Reader, out chan<- Event) error {
 				}
 				eventName = ""
 				dataLines = dataLines[:0]
+				dataBytes = 0
 			case strings.HasPrefix(line, ":"):
 				// SSE comment — keepalive / no-op
 			case strings.HasPrefix(line, "event:"):
 				eventName = strings.TrimSpace(line[len("event:"):])
 			case strings.HasPrefix(line, "data:"):
-				dataLines = append(dataLines, strings.TrimSpace(line[len("data:"):]))
+				payload := strings.TrimSpace(line[len("data:"):])
+				// Bound the accumulator: a server that streams data lines
+				// without ever closing the event (no blank line) would grow
+				// dataLines unbounded. Past the cap, error out so the outer
+				// loop reconnects instead of buffering toward OOM.
+				dataBytes += len(payload)
+				if dataBytes > maxEventBytes {
+					return fmt.Errorf("events: event exceeded %d bytes without boundary — reconnecting", maxEventBytes)
+				}
+				dataLines = append(dataLines, payload)
 			default:
 				// Unknown line — ignore (could be id: or retry:; we
 				// don't honor reconnect-time hints from the server,

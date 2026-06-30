@@ -16,12 +16,19 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", tmp)
 
+	// Populate EVERY field on the struct (all 9) so a future schema
+	// rename that drops a json tag — or a tag typo that round-trips to
+	// the zero value — fails the *got != *want comparison below.
 	want := &Credentials{
-		APIBase:     "http://localhost:8787",
-		AccessToken: "rl_abcdef1234567890abcdef1234567890",
-		RelayKey:    "sk-everyapi-abcdef1234567890",
-		UserID:      4242,
-		Username:    "test-user",
+		APIBase:           "http://localhost:8787",
+		AccessToken:       "rl_abcdef1234567890abcdef1234567890",
+		RelayKey:          "sk-everyapi-abcdef1234567890",
+		RefreshToken:      "rt_1234567890abcdef1234567890abcdef",
+		RelayKeyExpiresAt: 1893456000, // 2030-01-01, a non-zero unix deadline
+		OAuthClientID:     "everyapi-cli",
+		UserID:            4242,
+		Username:          "test-user",
+		Role:              10, // admin — exercises the non-zero role tag
 	}
 	if err := Save(want); err != nil {
 		t.Fatalf("Save: %v", err)

@@ -123,25 +123,36 @@ type DMContact struct {
 	Username string `json:"username"`
 }
 
-// DMThread is one row from /api/dm/thread.
+// DMThread is one row from /api/dm/thread — it mirrors the backend's
+// model.MessageThread wire shape. The thread stores its two
+// participants unordered as UserA / UserB (the server normalises the
+// pair before insert); it does NOT pre-compute an "other party" for
+// the caller, so the CLI resolves that viewer-relative from its own
+// user id. UnreadForViewer is already scoped to the requesting user by
+// the server.
 type DMThread struct {
-	ID                 int    `json:"id"`
-	OpenedAt           int64  `json:"opened_at"`
-	LastMessageAt      int64  `json:"last_message_at"`
-	LastMessagePreview string `json:"last_message_preview"`
-	UnreadCount        int    `json:"unread_count"`
-	OtherUserID        int    `json:"other_user_id"`
-	OtherUsername      string `json:"other_username"`
+	ID            int    `json:"id"`
+	UserAID       int    `json:"user_a_id"`
+	UserBID       int    `json:"user_b_id"`
+	Subject       string `json:"subject"`
+	UserAUsername string `json:"user_a_username,omitempty"`
+	UserBUsername string `json:"user_b_username,omitempty"`
+	// UnreadForViewer is the unread count from the requesting user's
+	// side, filled in by the server.
+	UnreadForViewer int   `json:"unread_for_viewer"`
+	LastMessageAt   int64 `json:"last_message_at"`
+	CreatedAt       int64 `json:"created_at"`
 }
 
-// DMMessage is one message in a thread.
+// DMMessage is one message in a thread. Read state is tracked per-thread
+// (a per-user read pointer on the thread), not per-message, so the backend
+// row carries no read_at — don't add one back expecting a per-message flag.
 type DMMessage struct {
 	ID        int    `json:"id"`
 	ThreadID  int    `json:"thread_id"`
-	SenderID  int    `json:"sender_id"`
+	SenderID  int    `json:"sender_user_id"`
 	Body      string `json:"body"`
 	CreatedAt int64  `json:"created_at"`
-	ReadAt    int64  `json:"read_at"`
 }
 
 // DMUnreadCount is the scalar from /api/dm/unread-count.
@@ -150,7 +161,7 @@ func (c *Client) DMUnreadCount(ctx context.Context) (int, error) {
 		Success bool   `json:"success"`
 		Message string `json:"message"`
 		Data    struct {
-			Unread int `json:"unread"`
+			Unread int `json:"unread_threads"`
 		} `json:"data"`
 	}
 	if err := c.do(ctx, "GET", "/api/dm/unread-count", nil, &env); err != nil {
@@ -220,8 +231,8 @@ func (c *Client) OpenDMThread(ctx context.Context, otherUserID int) (*DMThread, 
 		Data    DMThread `json:"data"`
 	}
 	body := struct {
-		OtherUserID int `json:"other_user_id"`
-	}{OtherUserID: otherUserID}
+		PeerUserID int `json:"peer_user_id"`
+	}{PeerUserID: otherUserID}
 	if err := c.do(ctx, "POST", "/api/dm/thread", body, &env); err != nil {
 		return nil, err
 	}

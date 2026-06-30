@@ -284,3 +284,286 @@ func TestSSE_FlushAtBlockStop(t *testing.T) {
 		t.Errorf("held false-positive tail dropped: decoded %q", got)
 	}
 }
+
+// ---- Gemini + Anthropic-thinking helpers ----------------------------------
+
+// sseGeminiEvent builds a Gemini streamGenerateContent data event from a
+// per-candidate list of part texts. JSON-encoded exactly like the gateway
+// (placeholder brackets HTML-escaped on the wire), so the restorer is
+// exercised on the decode→restore→re-encode path, not the raw bytes.
+func sseGeminiEvent(candidates [][]string) string {
+	cands := make([]any, 0, len(candidates))
+	for _, parts := range candidates {
+		ps := make([]any, 0, len(parts))
+		for _, txt := range parts {
+			ps = append(ps, map[string]any{"text": txt})
+		}
+		cands = append(cands, map[string]any{"content": map[string]any{"parts": ps}})
+	}
+	b, _ := json.Marshal(map[string]any{"candidates": cands})
+	return "data: " + string(b) + "\n\n"
+}
+
+// sseThinkingEvent builds an Anthropic content_block_delta/thinking_delta
+// event (extended-thinking display text), bracket-escaped like the gateway.
+func sseThinkingEvent(idx int, thinking string) string {
+	b, _ := json.Marshal(map[string]any{
+		"type":  "content_block_delta",
+		"index": idx,
+		"delta": map[string]any{"type": "thinking_delta", "thinking": thinking},
+	})
+	return "event: content_block_delta\ndata: " + string(b) + "\n\n"
+}
+
+// sseGeminiPartsByEvent returns the restored text of every
+// candidates[].content.parts[].text in the output, grouped per emitted
+// event (outer slice = events in order, inner = parts in array order).
+// Lets a caller pin which logical lane (part position) a fragment landed
+// in, so cross-part bleed is detectable.
+func sseGeminiPartsByEvent(t *testing.T, out string) [][]string {
+	t.Helper()
+	var byEvent [][]string
+	for _, ev := range strings.Split(out, "\n\n") {
+		var parts []string
+		for _, line := range strings.Split(ev, "\n") {
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+			data := strings.TrimPrefix(line, "data: ")
+			if !json.Valid([]byte(data)) {
+				continue
+			}
+			var obj map[string]any
+			_ = json.Unmarshal([]byte(data), &obj)
+			cands, ok := obj["candidates"].([]any)
+			if !ok {
+				continue
+			}
+			for _, c := range cands {
+				cm, ok := c.(map[string]any)
+				if !ok {
+					continue
+				}
+				content, ok := cm["content"].(map[string]any)
+				if !ok {
+					continue
+				}
+				ps, ok := content["parts"].([]any)
+				if !ok {
+					continue
+				}
+				for _, p := range ps {
+					if pm, ok := p.(map[string]any); ok {
+						if s, ok := pm["text"].(string); ok {
+							parts = append(parts, s)
+						}
+					}
+				}
+			}
+		}
+		if len(parts) > 0 {
+			byEvent = append(byEvent, parts)
+		}
+	}
+	return byEvent
+}
+
+// sseGeminiText flattens every restored Gemini part text in the output.
+func sseGeminiText(t *testing.T, out string) string {
+	t.Helper()
+	var sb strings.Builder
+	for _, ev := range sseGeminiPartsByEvent(t, out) {
+		for _, p := range ev {
+			sb.WriteString(p)
+		}
+	}
+	return sb.String()
+}
+
+// sseThinkingText concatenates every restored delta.thinking fragment in
+// the output stream.
+func sseThinkingText(t *testing.T, out string) string {
+	t.Helper()
+	var sb strings.Builder
+	for _, ev := range strings.Split(out, "\n\n") {
+		for _, line := range strings.Split(ev, "\n") {
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+			data := strings.TrimPrefix(line, "data: ")
+			if !json.Valid([]byte(data)) {
+				continue
+			}
+			var obj map[string]any
+			_ = json.Unmarshal([]byte(data), &obj)
+			if delta, ok := obj["delta"].(map[string]any); ok {
+				if s, ok := delta["thinking"].(string); ok {
+					sb.WriteString(s)
+				}
+			}
+		}
+	}
+	return sb.String()
+}
+
+// ---- Gemini candidate-part restore ----------------------------------------
+
+// TestSSE_GeminiPartRestore exercises the Gemini branch of displaySlots
+// (candidates[].content.parts[].text), which had zero coverage. A
+// placeholder embedded anywhere in a part's text must be restored to the
+// real secret on the decoded value (defeating the gateway's escaped
+// brackets) and re-encoded without breaking the JSON/SSE framing.
+func TestSSE_GeminiPartRestore(t *testing.T) {
+	cases := []struct {
+		name string
+		// frag builds the part text from the placeholder.
+		frag func(ph string) string
+	}{
+		{"placeholder only", func(ph string) string { return ph }},
+		{"placeholder mid-text", func(ph string) string { return "your key is " + ph + " — keep it safe" }},
+		{"placeholder at start", func(ph string) string { return ph + " is the token" }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewMapping()
+			secret := "sk-gemini-AAAAAAAAAAAAAAAAAAAA"
+			ph := m.PutOrGet(secret)
+			r := NewSSERestorer(m)
+			ev := sseGeminiEvent([][]string{{tc.frag(ph)}})
+			out := string(r.Write([]byte(ev))) + string(r.Final())
+
+			if got := sseGeminiText(t, out); !strings.Contains(got, secret) {
+				t.Errorf("Gemini part placeholder not restored: decoded %q", got)
+			}
+			if strings.Contains(out, PlaceholderPrefix) {
+				t.Errorf("placeholder leaked on the wire: %s", out)
+			}
+			assertSSEDataValid(t, out)
+		})
+	}
+}
+
+// TestSSE_GeminiFunctionCallNotRestored: a part carrying a functionCall is
+// the Gemini tool-arg sink (P3) — its sibling args must never get a real
+// secret restored into them, even when a text part in the same candidate
+// is restored.
+func TestSSE_GeminiFunctionCallNotRestored(t *testing.T) {
+	m := NewMapping()
+	ph := m.PutOrGet("sk-LIVE-gemini-DDDDDDDDDDDD")
+	b, _ := json.Marshal(map[string]any{
+		"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{
+			map[string]any{"functionCall": map[string]any{
+				"name": "run",
+				"args": map[string]any{"cmd": "curl " + ph},
+			}},
+		}}}},
+	})
+	r := NewSSERestorer(m)
+	out := string(r.Write([]byte("data: "+string(b)+"\n\n"))) + string(r.Final())
+	if strings.Contains(out, "sk-LIVE-gemini-DDDDDDDDDDDD") {
+		t.Errorf("real secret restored into Gemini functionCall args (P3 violation): %s", out)
+	}
+}
+
+// TestSSE_GeminiTwoPartsNoBleed is the per-(candidate,part) slot-keying
+// guard. One candidate streams TWO text parts (a thought + an answer),
+// each carrying its own placeholder split across two events so both parts
+// hold carryover simultaneously. The geminiPartStride keying must keep the
+// two parts' pending tails in distinct slots — if they collapsed to one
+// (e.g. keyed by the absent index field), part 1's held tail would
+// overwrite part 0's and neither placeholder would reassemble.
+func TestSSE_GeminiTwoPartsNoBleed(t *testing.T) {
+	m := NewMapping()
+	secretA := "sk-gemini-thought-1111111111111111"
+	secretB := "sk-gemini-answer-2222222222222222"
+	phA := m.PutOrGet(secretA)
+	phB := m.PutOrGet(secretB)
+	halfA, halfB := len(phA)/2, len(phB)/2
+
+	r := NewSSERestorer(m)
+	// Event 1: part 0 (thought) and part 1 (answer) each end mid-placeholder.
+	ev1 := sseGeminiEvent([][]string{{
+		"A: " + phA[:halfA],
+		"B: " + phB[:halfB],
+	}})
+	// Event 2: the remaining halves arrive — each part must reassemble its OWN.
+	ev2 := sseGeminiEvent([][]string{{
+		phA[halfA:] + " endA",
+		phB[halfB:] + " endB",
+	}})
+	out := string(r.Write([]byte(ev1))) + string(r.Write([]byte(ev2))) + string(r.Final())
+
+	byEvent := sseGeminiPartsByEvent(t, out)
+	// Reassemble each lane (part position) across the emitted events.
+	var laneA, laneB strings.Builder
+	for _, parts := range byEvent {
+		if len(parts) > 0 {
+			laneA.WriteString(parts[0])
+		}
+		if len(parts) > 1 {
+			laneB.WriteString(parts[1])
+		}
+	}
+	la, lb := laneA.String(), laneB.String()
+
+	if !strings.Contains(la, secretA) {
+		t.Errorf("part 0 (thought) did not reassemble its own secret: %q", la)
+	}
+	if !strings.Contains(lb, secretB) {
+		t.Errorf("part 1 (answer) did not reassemble its own secret: %q", lb)
+	}
+	// The load-bearing assertion: neither part's restored text may contain
+	// the OTHER part's secret — that's the bleed the stride keying prevents.
+	if strings.Contains(la, secretB) {
+		t.Errorf("part 1's secret bled into part 0: %q", la)
+	}
+	if strings.Contains(lb, secretA) {
+		t.Errorf("part 0's secret bled into part 1: %q", lb)
+	}
+	if strings.Contains(out, PlaceholderPrefix) {
+		t.Errorf("a placeholder leaked unresolved (carryover lost): %s", out)
+	}
+	assertSSEDataValid(t, out)
+}
+
+// ---- Anthropic thinking_delta restore -------------------------------------
+
+// TestSSE_AnthropicThinkingDeltaRestore covers the thinking_delta branch of
+// displaySlots (extended-thinking display text), which had zero coverage.
+// A placeholder in delta.thinking is human-display text and must be
+// restored — including when split across two thinking events (carryover).
+func TestSSE_AnthropicThinkingDeltaRestore(t *testing.T) {
+	t.Run("single event", func(t *testing.T) {
+		m := NewMapping()
+		secret := "sk-think-HHHHHHHHHHHHHHHHHHHH"
+		ph := m.PutOrGet(secret)
+		r := NewSSERestorer(m)
+		ev := sseThinkingEvent(0, "let me recall the key "+ph+" before answering")
+		out := string(r.Write([]byte(ev))) + string(r.Final())
+		if got := sseThinkingText(t, out); !strings.Contains(got, secret) {
+			t.Errorf("thinking_delta placeholder not restored: decoded %q", got)
+		}
+		if strings.Contains(out, PlaceholderPrefix) {
+			t.Errorf("placeholder leaked: %s", out)
+		}
+		assertSSEDataValid(t, out)
+	})
+
+	t.Run("split across events", func(t *testing.T) {
+		m := NewMapping()
+		secret := "sk-think-IIIIIIIIIIIIIIIIIIII"
+		ph := m.PutOrGet(secret)
+		half := len(ph) / 2
+		r := NewSSERestorer(m)
+		out := string(r.Write([]byte(sseThinkingEvent(0, "recall "+ph[:half])))) +
+			string(r.Write([]byte(sseThinkingEvent(0, ph[half:]+" done")))) +
+			string(r.Final())
+		if got := sseThinkingText(t, out); !strings.Contains(got, secret) {
+			t.Errorf("split thinking_delta placeholder not reassembled: decoded %q", got)
+		}
+		if strings.Contains(out, PlaceholderPrefix) {
+			t.Errorf("placeholder leaked: %s", out)
+		}
+		assertSSEDataValid(t, out)
+	})
+}

@@ -29,18 +29,29 @@ type SubscriptionPlanDTO struct {
 	Plan SubscriptionPlan `json:"plan"`
 }
 
-// SubscriptionSummary is one row from GetSubscriptionSelf's lists.
-// Loose typing on Status/Source/Period — the backend's enums grow
-// faster than the CLI's release cycle, surfacing as strings keeps
-// the SDK forward-compatible.
+// UserSubscription mirrors the buyer-visible fields of
+// model.UserSubscription. The subscription references its plan by
+// plan_id only — there is no plan_title on the wire. Loose typing on
+// Status/Source — the backend's enums grow faster than the CLI's
+// release cycle, surfacing them as strings keeps the SDK
+// forward-compatible.
+type UserSubscription struct {
+	ID           int    `json:"id"`
+	PlanID       int    `json:"plan_id"`
+	AmountTotal  int64  `json:"amount_total"`
+	AmountUsed   int64  `json:"amount_used"`
+	StartTime    int64  `json:"start_time"`
+	EndTime      int64  `json:"end_time"`
+	Status       string `json:"status"`
+	Source       string `json:"source"`
+	UpgradeGroup string `json:"upgrade_group"`
+}
+
+// SubscriptionSummary mirrors the controller's wrapper: each row in
+// GetSubscriptionSelf's lists is wrapped as {"subscription": {…}},
+// not the subscription flat.
 type SubscriptionSummary struct {
-	ID        int    `json:"id"`
-	PlanID    int    `json:"plan_id"`
-	PlanTitle string `json:"plan_title"`
-	Source    string `json:"source"`
-	Status    string `json:"status"`
-	StartAt   int64  `json:"start_at"`
-	ExpiresAt int64  `json:"expires_at"`
+	Subscription UserSubscription `json:"subscription"`
 }
 
 // SubscriptionSelf wraps the GetSubscriptionSelf payload. Active vs

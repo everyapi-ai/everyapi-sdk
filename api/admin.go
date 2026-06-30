@@ -65,9 +65,12 @@ func (c *Client) AdminSearchUsers(ctx context.Context, keyword string) ([]AdminU
 	v := url.Values{}
 	v.Set("keyword", keyword)
 	var env struct {
-		Success bool           `json:"success"`
-		Message string         `json:"message"`
-		Data    []AdminUserRow `json:"data"`
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+		Data    struct {
+			Items []AdminUserRow `json:"items"`
+			Total int            `json:"total"`
+		} `json:"data"`
 	}
 	if err := c.do(ctx, "GET", "/api/user/search?"+v.Encode(), nil, &env); err != nil {
 		return nil, err
@@ -75,7 +78,7 @@ func (c *Client) AdminSearchUsers(ctx context.Context, keyword string) ([]AdminU
 	if !env.Success {
 		return nil, errors.New(env.Message)
 	}
-	return env.Data, nil
+	return env.Data.Items, nil
 }
 
 // AdminGetUser fetches one user by id.

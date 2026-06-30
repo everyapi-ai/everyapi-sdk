@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // DefaultAPIBase is the production gateway. Hardcoded — no env-var
@@ -152,6 +153,13 @@ func Save(c *Credentials) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("mkdir config: %w", err)
 	}
+	// Reap temp files orphaned by a previous process hard-killed between
+	// the write and the rename below — each Save uses a unique temp name,
+	// so nothing else ever overwrites or removes them and they'd otherwise
+	// accumulate forever. Best-effort and age-guarded (see
+	// sweepStaleTempFiles); runs before our own write and again after the
+	// rename succeeds.
+	sweepStaleTempFiles(dir)
 	path := filepath.Join(dir, "credentials.json")
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
@@ -183,7 +191,39 @@ func Save(c *Credentials) error {
 		os.Remove(tmp)
 		return fmt.Errorf("rename credentials: %w", err)
 	}
+	sweepStaleTempFiles(dir)
 	return nil
+}
+
+// staleTempAge is how old a leftover credentials.json.tmp-* file must be
+// before sweepStaleTempFiles reaps it. A real Save's temp lives for
+// microseconds (create → write → chmod → rename), so anything this old
+// is an orphan from a process killed between write and rename. The age
+// floor also guarantees we never delete a *concurrent* Save's in-flight
+// temp (always brand new), preserving the unique-temp-name concurrency
+// safety the rename dance relies on.
+const staleTempAge = 5 * time.Minute
+
+// sweepStaleTempFiles best-effort removes orphaned credentials.json.tmp-*
+// files in dir. Every error is ignored: a sweep failure must never fail
+// the Save it runs alongside — these files are pure litter, not
+// correctness-critical, and only files older than staleTempAge are
+// touched so a concurrent writer's fresh temp is left alone.
+func sweepStaleTempFiles(dir string) {
+	matches, err := filepath.Glob(filepath.Join(dir, "credentials.json.tmp-*"))
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-staleTempAge)
+	for _, m := range matches {
+		info, statErr := os.Stat(m)
+		if statErr != nil {
+			continue
+		}
+		if info.ModTime().Before(cutoff) {
+			_ = os.Remove(m)
+		}
+	}
 }
 
 // Delete removes the credentials file. Returns nil on missing file

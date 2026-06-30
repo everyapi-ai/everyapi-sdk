@@ -143,7 +143,7 @@ type CompensationClaim struct {
 	Description      string `json:"description"`
 	Status           string `json:"status"`
 	SuggestedCap     int64  `json:"suggested_cap"`
-	ApprovedAmount   int64  `json:"approved_amount"`
+	ApprovedAmount   int64  `json:"final_amount"`
 	FiledAt          int64  `json:"filed_at"`
 	UpdatedAt        int64  `json:"updated_at"`
 }

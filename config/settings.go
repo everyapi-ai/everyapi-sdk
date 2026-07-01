@@ -32,6 +32,10 @@ type Settings struct {
 	// picker first, then the commands inside the chosen category.
 	// Unknown values fall back to grouped.
 	MenuLayout string `json:"menu_layout,omitempty"`
+
+	// GatewayRegion selects the official gateway when no explicit API base is
+	// supplied. Empty/global = api.everyapi.ai, cn = api-cn.everyapi.ai.
+	GatewayRegion string `json:"gateway_region,omitempty"`
 }
 
 // settingsPath is the on-disk path. Same dir as credentialsPath

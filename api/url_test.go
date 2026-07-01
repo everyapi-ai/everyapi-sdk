@@ -19,6 +19,7 @@ func TestWebOriginFromBase(t *testing.T) {
 		in   string
 		want string
 	}{
+		{"official china api maps to dashboard", "https://api-cn.everyapi.ai", "https://app.everyapi.ai"},
 		{"https api subdomain rewrites", "https://api.everyapi.ai", "https://app.everyapi.ai"},
 		{"http api subdomain rewrites (self-host over plain http)", "http://api.example.com", "http://app.example.com"},
 		{"path and port preserved on rewrite", "https://api.everyapi.ai:8443", "https://app.everyapi.ai:8443"},

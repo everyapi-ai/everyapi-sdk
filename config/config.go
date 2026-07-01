@@ -26,20 +26,53 @@ import (
 // ambient.
 const DefaultAPIBase = "https://api.everyapi.ai"
 
+const ChinaAPIBase = "https://api-cn.everyapi.ai"
+
 // ResolveAPIBase picks the gateway base URL for a command: an explicit
-// override (e.g. a --base flag) wins, else the logged-in gateway from
-// credentials.json, else the public default. The trailing slash is
+// override (e.g. a --base flag) wins, else a custom/self-hosted gateway from
+// credentials.json, else settings.gateway_region, else the logged-in official
+// gateway from credentials.json, else the public default. The trailing slash is
 // trimmed so callers can append "/api/..." without producing "//".
 func ResolveAPIBase(override string) string {
-	base := override
-	if base == "" {
-		if c, err := Load(); err == nil && c.APIBase != "" {
-			base = c.APIBase
-		} else {
-			base = DefaultAPIBase
+	if base := strings.TrimRight(strings.TrimSpace(override), "/"); base != "" {
+		return base
+	}
+
+	var credsBase string
+	if c, err := Load(); err == nil && c.APIBase != "" {
+		credsBase = normalizeAPIBase(c.APIBase)
+		if !isOfficialAPIBase(credsBase) {
+			return credsBase
 		}
 	}
-	return strings.TrimRight(base, "/")
+	if s, err := LoadSettings(); err == nil && strings.TrimSpace(s.GatewayRegion) != "" {
+		return APIBaseForGatewayRegion(s.GatewayRegion)
+	}
+	if credsBase != "" {
+		return credsBase
+	}
+	return DefaultAPIBase
+}
+
+func APIBaseForGatewayRegion(region string) string {
+	if EffectiveGatewayRegion(region) == "cn" {
+		return ChinaAPIBase
+	}
+	return DefaultAPIBase
+}
+
+func EffectiveGatewayRegion(region string) string {
+	switch strings.ToLower(strings.TrimSpace(region)) {
+	case "cn", "china":
+		return "cn"
+	default:
+		return "global"
+	}
+}
+
+func isOfficialAPIBase(base string) bool {
+	base = normalizeAPIBase(base)
+	return base == DefaultAPIBase || base == ChinaAPIBase
 }
 
 // Credentials is the on-disk credentials payload. JSON tags match the
@@ -134,10 +167,16 @@ func Load() (*Credentials, error) {
 	if err := json.Unmarshal(data, &c); err != nil {
 		return nil, fmt.Errorf("parse credentials: %w", err)
 	}
-	if c.APIBase == "" {
-		c.APIBase = DefaultAPIBase
-	}
+	c.APIBase = normalizeAPIBase(c.APIBase)
 	return &c, nil
+}
+
+func normalizeAPIBase(base string) string {
+	base = strings.TrimRight(base, "/")
+	if base == "" {
+		return DefaultAPIBase
+	}
+	return base
 }
 
 // Save writes credentials atomically (tmp + rename) at mode 0600. The

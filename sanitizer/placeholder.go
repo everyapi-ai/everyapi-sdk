@@ -7,7 +7,7 @@
 //	buyer SDK ──────────▶  proxy intercepts
 //	                       1. detect sensitive substrings in the request body
 //	                       2. replace each with a stable placeholder
-//	                       3. forward to https://api.everyapi.ai
+//	                       3. forward to the configured EveryAPI gateway
 //	                       4. on response (streaming or buffered), undo the
 //	                          substitution before returning bytes to the SDK
 //

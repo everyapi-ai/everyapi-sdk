@@ -92,6 +92,76 @@ func TestLoad_AppliesAPIBaseDefault(t *testing.T) {
 	}
 }
 
+func TestLoad_PreservesExplicitChinaAPIBase(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+
+	dir := filepath.Join(tmp, "everyapi")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	chinaGateway := []byte(`{"api_base":"https://api-cn.everyapi.ai/","access_token":"tok","user_id":1,"username":"u"}`)
+	if err := os.WriteFile(filepath.Join(dir, "credentials.json"), chinaGateway, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.APIBase != ChinaAPIBase {
+		t.Errorf("APIBase = %q, want %q", got.APIBase, ChinaAPIBase)
+	}
+}
+
+func TestResolveAPIBase_UsesGatewayRegionForOfficialGateway(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+
+	if err := Save(&Credentials{APIBase: DefaultAPIBase, AccessToken: "t"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveSettings(&Settings{GatewayRegion: "cn"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := ResolveAPIBase(""); got != ChinaAPIBase {
+		t.Errorf("ResolveAPIBase(empty) = %q, want %q", got, ChinaAPIBase)
+	}
+	if got := ResolveAPIBase("http://localhost:8787/"); got != "http://localhost:8787" {
+		t.Errorf("ResolveAPIBase(override) = %q", got)
+	}
+}
+
+func TestResolveAPIBase_UsesGatewayRegionWithoutCredentials(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+
+	if err := SaveSettings(&Settings{GatewayRegion: "cn"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := ResolveAPIBase(""); got != ChinaAPIBase {
+		t.Errorf("ResolveAPIBase(empty) = %q, want %q", got, ChinaAPIBase)
+	}
+}
+
+func TestResolveAPIBase_PreservesCustomCredentialGateway(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+
+	if err := Save(&Credentials{APIBase: "https://selfhost.example", AccessToken: "t"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveSettings(&Settings{GatewayRegion: "cn"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := ResolveAPIBase(""); got != "https://selfhost.example" {
+		t.Errorf("ResolveAPIBase(empty) = %q, want selfhost", got)
+	}
+}
+
 // TestDelete_Idempotent: a fresh logout without prior login (or two
 // consecutive logouts) must not error.
 func TestDelete_Idempotent(t *testing.T) {

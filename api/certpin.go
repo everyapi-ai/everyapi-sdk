@@ -41,19 +41,22 @@ import (
 // expectedSPKIPins is the curated set of base64(SHA-256(SPKI)) values
 // the official hosts are expected to present.
 //
-// Only api.everyapi.ai is pinned: that is the ONLY host the CLI's
-// pinned transport actually TLS-dials. app.everyapi.ai / everyapi.ai are
-// opened in the user's browser via cliprompt.OpenBrowser(), not through
-// this http.Client, so a pin for them would never be exercised by
-// inspect() — pinning only what is actually verified keeps the set
-// honest and avoids shipping config no smoke test can reach. The
-// sanitizer proxy's upstreamClient (clients/sdk/sanitizer/server.go) is a
-// SEPARATE, deliberately unpinned transport: it forwards to third-party
-// AI providers (OpenAI / Anthropic / Gemini), whose certificates the
-// gateway cannot pin — so cert pinning here does NOT cover that path.
+// Only API gateway hosts are pinned: those are the hosts the CLI's pinned
+// transport actually TLS-dials. app.everyapi.ai / everyapi.ai are opened in
+// the user's browser via cliprompt.OpenBrowser(), not through this http.Client,
+// so pins for them would never be exercised by inspect() — pinning only what
+// is actually verified keeps the set honest and avoids shipping config no
+// smoke test can reach. The sanitizer proxy's upstreamClient
+// (clients/sdk/sanitizer/server.go) is a SEPARATE, deliberately unpinned
+// transport: it forwards to third-party AI providers (OpenAI / Anthropic /
+// Gemini), whose certificates the gateway cannot pin — so cert pinning here
+// does NOT cover that path.
 //
-// Captured 2026-06-23 from the live k8s ingress, which serves a Google
-// Trust Services chain:  leaf  <  WE1 intermediate  <  GTS Root R4.
+// Captured 2026-06-23 from the live k8s ingress, which serves a Google Trust
+// Services chain:  leaf  <  WE1 intermediate  <  GTS Root R4.
+//
+// Captured 2026-07-01 from the live ESA edge, which serves a DigiCert chain:
+// leaf  <  Encryption Everywhere DV TLS CA - G2  <  DigiCert Global Root G2.
 //
 // inspect() matches against EVERY certificate the server presents (leaf
 // + intermediates), so we pin the long-lived ISSUING INTERMEDIATE (WE1)
@@ -75,17 +78,22 @@ import (
 // ── WHEN TO UPDATE (NOT on routine leaf rotation) ───────────────────
 // Only when the issuing CA changes — a new GTS intermediate (e.g. WE2)
 // or a migration to a different CA. Re-capture the chain:
-//   openssl s_client -servername api.everyapi.ai \
-//   -connect api.everyapi.ai:443 -showcerts </dev/null 2>/dev/null
+//
+//	openssl s_client -servername api-cn.everyapi.ai \
+//	-connect api-cn.everyapi.ai:443 -showcerts </dev/null 2>/dev/null
+//
 // then for the INTERMEDIATE cert in that dump:
-//   openssl x509 -noout -pubkey | openssl pkey -pubin -outform der \
-//   | openssl dgst -sha256 -binary | openssl base64
+//
+//	openssl x509 -noout -pubkey | openssl pkey -pubin -outform der \
+//	| openssl dgst -sha256 -binary | openssl base64
+//
 // ADD the new pin (keep the old one until it is fully retired). Until
 // users upgrade, an old binary just logs the benign mismatch — no
 // functional breakage.
 // ────────────────────────────────────────────────────────────────────
 var expectedSPKIPins = map[string]struct{}{
 	"kIdp6NNEd8wsugYyyIYFsi1ylMCED3hZbSR8ZFsa/A4=": {}, // GTS "WE1" intermediate — issues the api.everyapi.ai leaf
+	"gxeKFFaZ2HFJIsTdTjEl6nVo3ckTCX+qzRMqb9Xoa1w=": {}, // DigiCert Encryption Everywhere DV TLS CA - G2 — issues the api-cn.everyapi.ai leaf
 }
 
 // isOfficialEveryAPIHost reports whether host is an official EveryAPI

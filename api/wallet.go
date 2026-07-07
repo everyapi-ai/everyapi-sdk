@@ -30,19 +30,13 @@ type TopUp struct {
 // and stashes the rest in Raw for callers that need the bleeding
 // edge without an SDK bump.
 type TopupInfo struct {
-	EnableOnlineTopup       bool                `json:"enable_online_topup"`
-	EnableStripeTopup       bool                `json:"enable_stripe_topup"`
-	EnableCreemTopup        bool                `json:"enable_creem_topup"`
-	EnableWaffoTopup        bool                `json:"enable_waffo_topup"`
-	EnableWaffoPancakeTopup bool                `json:"enable_waffo_pancake_topup"`
-	MinTopup                int                 `json:"min_topup"`
-	StripeMinTopup          int                 `json:"stripe_min_topup"`
-	WaffoMinTopup           int                 `json:"waffo_min_topup"`
-	WaffoPancakeMinTopup    int                 `json:"waffo_pancake_min_topup"`
-	PayMethods              []map[string]string `json:"pay_methods"`
-	AmountOptions           []float64           `json:"amount_options"`
-	Discount                map[string]float64  `json:"discount"`
-	TopupLink               string              `json:"topup_link"`
+	EnableFluxaTopup bool                `json:"enable_fluxa_topup"`
+	MinTopup         int                 `json:"min_topup"`
+	FluxaMinTopup    int                 `json:"fluxa_min_topup"`
+	PayMethods       []map[string]string `json:"pay_methods"`
+	AmountOptions    []float64           `json:"amount_options"`
+	Discount         map[string]float64  `json:"discount"`
+	TopupLink        string              `json:"topup_link"`
 }
 
 // GetTopupInfo reads /api/user/topup/info. UserAuth required.

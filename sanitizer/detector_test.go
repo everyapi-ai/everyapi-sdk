@@ -50,6 +50,14 @@ func TestDetector_NewProviderKeys(t *testing.T) {
 	// without tripping GitHub Push Protection on the mirror repo — real
 	// `sk_live_…` strings with valid Stripe checksums get rejected at
 	// push time. Keep the markers if you ever rewrite these.
+	//
+	// The Hugging Face fixture is a special case: GitHub's "Hugging Face
+	// User Access Token" partner pattern is a pure format match
+	// (`hf_` + 34 alnum) with NO entropy/dictionary check — unlike the
+	// Google/GitHub patterns, it flags even a sequential-filler body — so
+	// it blocked the SDK mirror push. Keep its body deliberately SHORTER
+	// than 34 chars (our own detector floor is only 20) so it can never
+	// look like a real HF token to push protection.
 	cases := []struct {
 		name     string
 		d        *RegexDetector
@@ -69,6 +77,10 @@ func TestDetector_NewProviderKeys(t *testing.T) {
 			"xoxb-FAKEXOXBTESTFIXTUREDONOTUSE next", "xoxb-FAKEXOXBTESTFIXTUREDONOTUSE"},
 		{"stripe", stripeKeyDetector(),
 			"STRIPE=sk_test_FAKETESTFIXTUREDONOTUSE000 end", "sk_test_FAKETESTFIXTUREDONOTUSE000"},
+		{"huggingface", huggingFaceKeyDetector(),
+			"HF_TOKEN=hf_FAKEHFTESTFIXTUREDONOTUSE0 end", "hf_FAKEHFTESTFIXTUREDONOTUSE0"},
+		{"replicate", replicateKeyDetector(),
+			"REPLICATE_API_TOKEN=r8_abcdefghijklmnopqrstuvwxyzABCDEF end", "r8_abcdefghijklmnopqrstuvwxyzABCDEF"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

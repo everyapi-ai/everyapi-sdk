@@ -16,9 +16,9 @@ func TestGetTopupInfo(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"success":true,"data":{
-			"enable_online_topup":true,"enable_stripe_topup":true,
-			"min_topup":10,"stripe_min_topup":5,
-			"pay_methods":[{"name":"Stripe","type":"stripe","min_topup":"5"}],
+			"enable_fluxa_topup":true,
+			"min_topup":10,"fluxa_min_topup":5,
+			"pay_methods":[],
 			"amount_options":[10,50,100],
 			"discount":{"100":0.95},
 			"topup_link":"https://dash/topup"
@@ -29,10 +29,10 @@ func TestGetTopupInfo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTopupInfo: %v", err)
 	}
-	if !info.EnableStripeTopup || info.StripeMinTopup != 5 || info.MinTopup != 10 {
+	if !info.EnableFluxaTopup || info.FluxaMinTopup != 5 || info.MinTopup != 10 {
 		t.Errorf("scalar fields: %+v", info)
 	}
-	if len(info.PayMethods) != 1 || info.PayMethods[0]["type"] != "stripe" {
+	if len(info.PayMethods) != 0 {
 		t.Errorf("pay_methods: %+v", info.PayMethods)
 	}
 	if info.Discount["100"] != 0.95 {
@@ -46,20 +46,20 @@ func TestListUserTopups(t *testing.T) {
 			if r.URL.Path != "/api/user/topup/self" {
 				t.Errorf("path = %q", r.URL.Path)
 			}
-			if r.URL.Query().Get("keyword") != "stripe" {
+			if r.URL.Query().Get("keyword") != "fluxa" {
 				t.Errorf("keyword arg lost: %q", r.URL.RawQuery)
 			}
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(`{"success":true,"data":{"total":2,"items":[
-				{"id":1,"amount":50,"money":10.5,"status":"done","payment_method":"stripe","trade_no":"t-1","create_time":1700000000}
+				{"id":1,"amount":50,"money":10.5,"status":"done","payment_method":"fluxa","trade_no":"t-1","create_time":1700000000}
 			]}}`))
 		}))
 		defer srv.Close()
-		rows, total, err := New(srv.URL, "acc").WithUserID(7).ListUserTopups(context.Background(), 1, 20, "stripe")
+		rows, total, err := New(srv.URL, "acc").WithUserID(7).ListUserTopups(context.Background(), 1, 20, "fluxa")
 		if err != nil {
 			t.Fatalf("ListUserTopups: %v", err)
 		}
-		if total != 2 || len(rows) != 1 || rows[0].PaymentMethod != "stripe" {
+		if total != 2 || len(rows) != 1 || rows[0].PaymentMethod != "fluxa" {
 			t.Errorf("got rows=%+v total=%d", rows, total)
 		}
 	})

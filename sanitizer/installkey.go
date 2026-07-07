@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 
 	"github.com/everyapi-ai/everyapi-sdk/config"
@@ -56,7 +57,8 @@ func installKey() []byte {
 // reintroduce the enumeration oracle this whole scheme exists to close.
 func loadOrCreateInstallKey() []byte {
 	path, perr := installKeyPath()
-	if perr == nil {
+	safe := perr == nil && installKeyFileIsSafe(path)
+	if safe {
 		if data, rerr := os.ReadFile(path); rerr == nil && len(data) >= installKeyLen {
 			return data[:installKeyLen]
 		}
@@ -65,7 +67,7 @@ func loadOrCreateInstallKey() []byte {
 	if _, rerr := crand.Read(key); rerr != nil {
 		panic("sanitizer: system CSPRNG unavailable, cannot mint install key: " + rerr.Error())
 	}
-	if perr == nil && path != "" {
+	if safe && path != "" {
 		// Best-effort persist at 0600 so the key survives restarts and
 		// stays stable across processes; never log the key itself.
 		if mkErr := os.MkdirAll(filepath.Dir(path), 0o700); mkErr == nil {
@@ -73,6 +75,31 @@ func loadOrCreateInstallKey() []byte {
 		}
 	}
 	return key
+}
+
+// installKeyFileIsSafe is a trimmed duplicate of the check
+// clients/edge/internal/identity uses for its identity file (Lstat, not
+// Stat, so a symlink can't satisfy the check by proxy; the numeric perm
+// check is skipped on Windows, whose ACLs aren't expressible as POSIX
+// bits). Unlike that package this returns a bool instead of an error: an
+// "unsafe" file here just means "don't read or write through it" — the
+// caller's fallback (mint a fresh in-memory-only key) is always safe, so
+// there's nothing for a returned error to add. A missing file (the normal
+// first-run case) is treated as safe-to-proceed. clients/edge and
+// clients/sdk are separate Go modules with no existing dependency between
+// them, so this is duplicated rather than shared.
+func installKeyFileIsSafe(path string) bool {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return os.IsNotExist(err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		return true
+	}
+	return info.Mode().Perm()&0o077 == 0
 }
 
 // installKeyPath resolves ~/.config/everyapi/sanitizer-key.

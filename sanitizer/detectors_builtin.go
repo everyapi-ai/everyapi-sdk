@@ -18,6 +18,8 @@ const (
 	DetectorStripeKey      = "stripe_key"
 	DetectorAWSAccessKey   = "aws_access_key"
 	DetectorPEMPrivateKey  = "pem_private_key"
+	DetectorHuggingFaceKey = "huggingface_key"
+	DetectorReplicateKey   = "replicate_key"
 	DetectorLuhnCreditCard = "luhn_credit_card"
 	DetectorChineseID      = "chinese_id"
 )
@@ -48,6 +50,8 @@ func BuiltinDetectors() []Detector {
 		stripeKeyDetector(),
 		awsAccessKeyDetector(),
 		pemPrivateKeyDetector(),
+		huggingFaceKeyDetector(),
+		replicateKeyDetector(),
 	}
 }
 
@@ -180,6 +184,24 @@ func pemPrivateKeyDetector() *RegexDetector {
 	)
 }
 
+// ---- HuggingFace ------------------------------------------------------------
+//
+// HuggingFace user access tokens: `hf_` + ~37 url-safe chars, 40 total.
+// Prefix is documented and stable (huggingface.co/docs/hub/security-tokens).
+
+func huggingFaceKeyDetector() *RegexDetector {
+	return NewRegexDetector(DetectorHuggingFaceKey, `\bhf_[A-Za-z0-9]{20,}\b`)
+}
+
+// ---- Replicate ---------------------------------------------------------------
+//
+// Replicate API tokens: `r8_` + ~37 alnum chars, 40 total. Prefix is
+// documented and stable (replicate.com/docs/topics/security/api-tokens).
+
+func replicateKeyDetector() *RegexDetector {
+	return NewRegexDetector(DetectorReplicateKey, `\br8_[A-Za-z0-9]{20,}\b`)
+}
+
 // ---- Luhn credit card ------------------------------------------------------
 //
 // Card-shaped digit runs (13–19 digits, optionally separated by space
@@ -284,6 +306,8 @@ var builtinDescriptions = map[string]string{
 	DetectorStripeKey:      "Stripe secret / restricted key (sk_/rk_ live or test)",
 	DetectorAWSAccessKey:   "AWS access key ID (AKIA/ASIA/AGPA/…)",
 	DetectorPEMPrivateKey:  "PEM-encoded private key block",
+	DetectorHuggingFaceKey: "HuggingFace access token (hf_…)",
+	DetectorReplicateKey:   "Replicate API token (r8_…)",
 	DetectorLuhnCreditCard: "Credit card number (13–19 digits + Luhn check)",
 	DetectorChineseID:      "Chinese resident ID (18 digits + ISO-7064 checksum)",
 }

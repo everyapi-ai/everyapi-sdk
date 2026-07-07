@@ -63,19 +63,27 @@ func TestCreateSellerChannel(t *testing.T) {
 			if got := r.Header.Get("Content-Type"); got != "application/json" {
 				t.Errorf("Content-Type = %q, want application/json", got)
 			}
-			// Body shape: backend reads name/type/keys/models — assert
-			// the CLI didn't drop one of those fields, AND that `keys`
-			// is the new array form (a regression to the old single
-			// `key` field would break the backend's per-key state
-			// invariants from #186).
+			// Body shape: backend reads name/kind_slug/keys/models —
+			// assert the CLI didn't drop one of those fields, AND that
+			// `keys` is the new array form (a regression to the old
+			// single `key` field would break the backend's per-key
+			// state invariants from #186). kind_slug (not the retired
+			// integer `type`) is what the backend now binds — sending
+			// `type` makes the backend drop it and 422.
 			var body map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatalf("decode body: %v", err)
 			}
-			for _, k := range []string{"name", "type", "keys", "models"} {
+			for _, k := range []string{"name", "kind_slug", "keys", "models"} {
 				if _, ok := body[k]; !ok {
 					t.Errorf("request body missing %q (got %v)", k, body)
 				}
+			}
+			if got, _ := body["kind_slug"].(string); got != "openai" {
+				t.Errorf("kind_slug = %v, want \"openai\"", body["kind_slug"])
+			}
+			if _, ok := body["type"]; ok {
+				t.Errorf("request body must send kind_slug, not the retired `type` field — got %v", body)
 			}
 			if _, ok := body["key"]; ok {
 				t.Errorf("request body must use keys[], not legacy `key` field — got %v", body)
@@ -86,10 +94,10 @@ func TestCreateSellerChannel(t *testing.T) {
 		defer srv.Close()
 
 		id, err := New(srv.URL, "acc").WithUserID(7).CreateSellerChannel(context.Background(), SellerChannelCreate{
-			Name:   "x",
-			Type:   1,
-			Keys:   []string{"sk-test"},
-			Models: "gpt-4",
+			Name:     "x",
+			KindSlug: "openai",
+			Keys:     []string{"sk-test"},
+			Models:   "gpt-4",
 		})
 		if err != nil {
 			t.Fatalf("CreateSellerChannel: %v", err)
@@ -110,7 +118,7 @@ func TestCreateSellerChannel(t *testing.T) {
 		}))
 		defer srv.Close()
 		_, err := New(srv.URL, "acc").WithUserID(7).CreateSellerChannel(context.Background(), SellerChannelCreate{
-			Name: "x", Type: 1, Keys: []string{"k"}, Models: "m",
+			Name: "x", KindSlug: "openai", Keys: []string{"k"}, Models: "m",
 		})
 		if err == nil || !strings.Contains(err.Error(), "account is not active") {
 			t.Fatalf("want error mentioning the server message, got %v", err)
@@ -136,7 +144,7 @@ func TestCreateSellerChannel(t *testing.T) {
 		defer srv.Close()
 
 		_, err := New(srv.URL, "acc").WithUserID(7).CreateSellerChannel(context.Background(), SellerChannelCreate{
-			Name: "pool", Type: 1, Models: "m",
+			Name: "pool", KindSlug: "openai", Models: "m",
 			Keys:       []string{"sk-a", "sk-b", "sk-c"},
 			KeyRemarks: []string{"primary", "", "fallback"},
 		})

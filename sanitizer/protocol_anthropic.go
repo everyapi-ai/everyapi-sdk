@@ -38,7 +38,7 @@ func (p *AnthropicProtocol) PathMatch(path string) bool {
 }
 
 // anthropicTextKeys overlaps with openaiTextKeys but lives separately
-// so the per-protocol set stays self-documenting and one API's
+// so the per-protocol set stays self-documenting and one protocol's
 // schema drift doesn't quietly change the other's sanitiser surface.
 var anthropicTextKeys = map[string]bool{
 	"content":     true, // messages[].content + system content blocks

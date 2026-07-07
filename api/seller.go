@@ -21,11 +21,11 @@ import (
 //	2 = manually disabled by the seller
 //	3 = auto-disabled by the health-check worker
 type SellerChannel struct {
-	ID     int    `json:"id"`
-	Name   string `json:"name"`
-	Type   int    `json:"type"`
-	Status int    `json:"status"`
-	Models string `json:"models"`
+	ID       int    `json:"id"`
+	Name     string `json:"name"`
+	KindSlug string `json:"kind_slug"`
+	Status   int    `json:"status"`
+	Models   string `json:"models"`
 	// Editable fields the `seller update` read-modify-write must preserve.
 	// The list endpoint already returns them (only the credential Key is
 	// zeroed server-side), so decoding them here lets an update seed `req`
@@ -130,7 +130,10 @@ func (c *Client) GetSellerEligibility(ctx context.Context) (*SellerEligibility, 
 // SellerChannelCreate matches backend controller.SellerChannelCreate.
 // Whitelisted fields only — the backend strips anything else (group,
 // owner_user_id, priority/weight, base_url) per PRODUCT §4.1 / §4.4a.
-// Name / Type / Keys / Models are the practical minimum.
+// Name / KindSlug / Keys / Models are the practical minimum. KindSlug
+// is the backend channel_kinds.slug (openai / anthropic / codex /
+// gemini / vertex_ai / aws / xai / deepseek); the backend rejects any
+// slug outside its seller allow-list with a 422.
 //
 // Keys is the multi-key backup pool (B2, PRODUCT §4.5): one channel,
 // N equivalent credentials, per-key failover. KeyRemarks is
@@ -141,7 +144,7 @@ func (c *Client) GetSellerEligibility(ctx context.Context) (*SellerEligibility, 
 // the older single `key` field too, but new code should send Keys.
 type SellerChannelCreate struct {
 	Name           string   `json:"name"`
-	Type           int      `json:"type"`
+	KindSlug       string   `json:"kind_slug"`
 	Keys           []string `json:"keys"`
 	KeyRemarks     []string `json:"key_remarks,omitempty"`
 	Models         string   `json:"models"`

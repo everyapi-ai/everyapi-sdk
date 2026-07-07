@@ -11,7 +11,7 @@ import (
 // GetSelf must distinguish the backend's two rejection shapes so callers
 // (cmd/status, doctor) can map a bad token to "session expired": an
 // invalid access token comes back HTTP 200 + {success:false} (legacy
-// one-api convention), which must surface as *EnvelopeError — NOT a
+// envelope convention), which must surface as *EnvelopeError — NOT a
 // generic error and NOT an *APIError (that's reserved for non-2xx).
 func TestGetSelf_EnvelopeRejection(t *testing.T) {
 	t.Run("200 + success:false is an EnvelopeError", func(t *testing.T) {
@@ -41,7 +41,7 @@ func TestGetSelf_EnvelopeRejection(t *testing.T) {
 
 	t.Run("200 + code:unauthorized is promoted to a 401", func(t *testing.T) {
 		// The backend tags an invalid/expired token this way (HTTP 200,
-		// kept for one-api/dashboard compat). c.do must promote it so
+		// kept for legacy dashboard-envelope compat). c.do must promote it so
 		// IsUnauthorized catches it for EVERY endpoint, not just GetSelf.
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")

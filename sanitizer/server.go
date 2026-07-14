@@ -67,6 +67,12 @@ type Config struct {
 	// the operator has deliberately fronted it with their own
 	// authenticated tunnel.
 	AllowNonLoopback bool
+
+	// GuardClaudeToolCorruption buffers successful Anthropic Messages SSE
+	// responses until their terminal stop reason can be validated. Known
+	// malformed tool-call serialization is discarded and returned as a
+	// retryable 529 before any response byte reaches Claude Code.
+	GuardClaudeToolCorruption bool
 }
 
 func (c *Config) applyDefaults() {
@@ -439,36 +445,111 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	// proxy, not whatever the SDK set as Host.
 	outReq.Host = s.upst.Host
 
-	resp, err := upstreamClient.Do(outReq)
-	if err != nil {
-		http.Error(w, "proxy: upstream: "+err.Error(), http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	// SSE ignores RequestTimeout — stop the timer so a long stream
-	// isn't cut mid-flight.
-	if timer != nil && isStreamingResponse(resp) {
-		timer.Stop()
-	}
-
-	// Defence in depth: we forced an identity request, so the Go
-	// transport transparently decodes a gzip response (and strips its
-	// Content-Encoding/Length). If the upstream still returned an
-	// encoding the transport didn't handle, decode it here so we never
-	// emit un-restored placeholders or a stranded encoded stream.
-	respBody := resp.Body
+	// A recovered Claude session gets one transparent upstream retry before
+	// the official Anthropic SDK's normal 5xx retry policy takes over. Across
+	// the two layers a persistently risky turn gets up to six clean chances,
+	// while no rejected response byte is ever committed to Claude Code.
+	const maxGuardedClaudeAttempts = 2
+	const maxGuardedClaudeResponse = 64 << 20
+	var resp *http.Response
+	var respBody io.ReadCloser
 	decodedHere := false
-	if ce := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Encoding"))); ce != "" && ce != "identity" {
-		dec, derr := wrapDecoder(ce, resp.Body)
-		if derr != nil {
-			http.Error(w, "proxy: cannot decode "+ce+" upstream response: "+derr.Error(), http.StatusBadGateway)
+	for attempt := 0; ; attempt++ {
+		attemptReq := outReq
+		if attempt > 0 {
+			attemptReq = outReq.Clone(reqCtx)
+			if outReq.GetBody == nil {
+				http.Error(w, "proxy: cannot replay upstream Claude request", http.StatusBadGateway)
+				return
+			}
+			replayBody, bodyErr := outReq.GetBody()
+			if bodyErr != nil {
+				http.Error(w, "proxy: cannot replay upstream Claude request", http.StatusBadGateway)
+				return
+			}
+			attemptReq.Body = replayBody
+			// The previous attempt's streaming response disarmed the
+			// RequestTimeout timer; re-arm it so this attempt keeps the
+			// documented non-streaming deadline (it is disarmed again
+			// below if this attempt also streams).
+			if timer != nil {
+				timer.Reset(s.cfg.RequestTimeout)
+			}
+		}
+
+		resp, err = upstreamClient.Do(attemptReq)
+		if err != nil {
+			http.Error(w, "proxy: upstream: "+err.Error(), http.StatusBadGateway)
 			return
 		}
-		defer func() { _ = dec.Close() }()
-		respBody = dec
+
+		// SSE ignores RequestTimeout — stop the timer so a long stream
+		// isn't cut mid-flight.
+		if timer != nil && isStreamingResponse(resp) {
+			timer.Stop()
+		}
+
+		// Defence in depth: we forced an identity request, so the Go
+		// transport transparently decodes a gzip response (and strips its
+		// Content-Encoding/Length). If the upstream still returned an
+		// encoding the transport didn't handle, decode it here.
+		respBody = resp.Body
+		decodedHere = false
+		if ce := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Encoding"))); ce != "" && ce != "identity" {
+			dec, derr := wrapDecoder(ce, resp.Body)
+			if derr != nil {
+				_ = resp.Body.Close()
+				http.Error(w, "proxy: cannot decode "+ce+" upstream response: "+derr.Error(), http.StatusBadGateway)
+				return
+			}
+			respBody = dec
+			decodedHere = true
+		}
+
+		guardThisResponse := s.cfg.GuardClaudeToolCorruption &&
+			strings.HasPrefix(r.URL.Path, "/v1/messages") &&
+			resp.StatusCode >= 200 && resp.StatusCode < 300 &&
+			isSSEContentType(resp.Header.Get("Content-Type"))
+		if !guardThisResponse {
+			break
+		}
+
+		guarded, readErr := io.ReadAll(io.LimitReader(respBody, maxGuardedClaudeResponse+1))
+		if readErr != nil {
+			_ = respBody.Close()
+			_ = resp.Body.Close()
+			http.Error(w, "proxy: failed to validate upstream Claude response", http.StatusBadGateway)
+			return
+		}
+		if len(guarded) > maxGuardedClaudeResponse {
+			_ = respBody.Close()
+			_ = resp.Body.Close()
+			http.Error(w, "proxy: upstream Claude response exceeded validation limit", http.StatusBadGateway)
+			return
+		}
+		if anthropicSSEHasToolCallCorruption(guarded) {
+			s.cfg.Logger.Printf("sanitizer: discarded malformed Claude tool-call response before delivery (attempt %d/%d)", attempt+1, maxGuardedClaudeAttempts)
+			_ = respBody.Close()
+			_ = resp.Body.Close()
+			if attempt+1 < maxGuardedClaudeAttempts {
+				continue
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Should-Retry", "true")
+			w.Header().Set("Retry-After-Ms", "0")
+			w.WriteHeader(529)
+			_, _ = io.WriteString(w, `{"type":"error","error":{"type":"overloaded_error","message":"Upstream response failed validation and was discarded before delivery."}}`)
+			return
+		}
+
+		_ = respBody.Close()
+		_ = resp.Body.Close()
+		respBody = io.NopCloser(bytes.NewReader(guarded))
 		decodedHere = true
+		break
 	}
+	defer func() { _ = respBody.Close() }()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Only definitively-binary responses (image/audio/video/octet-stream)
 	// bypass the restorer and forward verbatim. Everything else —
@@ -516,6 +597,16 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if isSSEContentType(respCT) {
+		// A proxy with no detectors (guard-only mode) can never mint a
+		// placeholder, so there is nothing to restore: forward the stream
+		// verbatim. This keeps guarded clean SSE byte-identical — the
+		// restorer's partial-placeholder carry logic would otherwise
+		// reframe deltas whose text ends in a placeholder prefix ('<').
+		if len(s.cfg.Detectors) == 0 {
+			n, _ := io.Copy(&flushWriter{w: w, f: flusher}, respBody)
+			s.stats.bytesOut.Add(n)
+			return
+		}
 		// Server-Sent Events: restore incrementally so streaming latency
 		// is preserved (only a genuinely-pending partial placeholder is
 		// ever held back).
@@ -769,6 +860,21 @@ func wrapDecoder(encoding string, r io.Reader) (io.ReadCloser, error) {
 	default:
 		return nil, fmt.Errorf("unsupported content-encoding %q", encoding)
 	}
+}
+
+// flushWriter flushes after every write so io.Copy of an SSE stream
+// preserves the upstream's chunk-level latency.
+type flushWriter struct {
+	w io.Writer
+	f http.Flusher
+}
+
+func (fw *flushWriter) Write(p []byte) (int, error) {
+	n, err := fw.w.Write(p)
+	if n > 0 && fw.f != nil {
+		fw.f.Flush()
+	}
+	return n, err
 }
 
 // copyHeaders moves header values from src to dst, preserving the

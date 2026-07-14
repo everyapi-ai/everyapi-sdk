@@ -1,6 +1,7 @@
 package sanitizer
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"io"
@@ -9,7 +10,206 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
+
+func TestServerClaudeGuardStreamsCleanEventBeforeResponseCompletes(t *testing.T) {
+	first := sseTextEvent(0, "First token")
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		_, _ = io.WriteString(w, first)
+		flusher.Flush()
+		<-release
+		_, _ = io.WriteString(w, claudeMessageDeltaEvent("end_turn")+claudeMessageStopEvent())
+	}))
+	defer upstream.Close()
+
+	base, _, stop := startServerCfg(t, Config{
+		UpstreamBase:              upstream.URL,
+		Detectors:                 []Detector{},
+		GuardClaudeToolCorruption: true,
+	})
+	defer stop()
+
+	responses := make(chan *http.Response, 1)
+	errs := make(chan error, 1)
+	go func() {
+		resp, err := http.Post(base+"/v1/messages", "application/json", strings.NewReader(`{"stream":true,"messages":[]}`))
+		if err != nil {
+			errs <- err
+			return
+		}
+		responses <- resp
+	}()
+	var resp *http.Response
+	select {
+	case resp = <-responses:
+	case err := <-errs:
+		close(release)
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("clean SSE response headers were buffered until the response completed")
+	}
+	defer resp.Body.Close()
+	line := make(chan string, 1)
+	go func() {
+		got, _ := bufio.NewReader(resp.Body).ReadString('\n')
+		line <- got
+	}()
+	select {
+	case got := <-line:
+		if got != "event: content_block_delta\n" {
+			t.Fatalf("first streamed line = %q", got)
+		}
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("clean SSE event was buffered until the response completed")
+	}
+	close(release)
+}
+
+func TestServerClaudeGuardDropsPollutedTextButKeepsStructuredToolUse(t *testing.T) {
+	pollutedText := sseTextEvent(0, "Reviewing now.\n\ncourt court court court court")
+	structured := claudeToolUseBlockEvent(1) + claudeMessageDeltaEvent("tool_use") + claudeMessageStopEvent()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, pollutedText+structured)
+	}))
+	defer upstream.Close()
+
+	base, _, stop := startServerCfg(t, Config{
+		UpstreamBase:              upstream.URL,
+		Detectors:                 []Detector{},
+		GuardClaudeToolCorruption: true,
+	})
+	defer stop()
+
+	resp, err := http.Post(base+"/v1/messages", "application/json", strings.NewReader(`{"stream":true,"messages":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if bytes.Contains(body, []byte("court")) {
+		t.Fatalf("polluted assistant text reached the client: %s", body)
+	}
+	if !bytes.Contains(body, []byte(`"type":"tool_use"`)) || !bytes.Contains(body, []byte(`"name":"Bash"`)) {
+		t.Fatalf("structured tool call was lost: %s", body)
+	}
+}
+
+func TestServerClaudeGuardDetectsPollutionSplitAcrossTextDeltas(t *testing.T) {
+	stream := sseTextEvent(0, "court ") + sseTextEvent(0, "court ") + sseTextEvent(0, "court") +
+		claudeToolUseBlockEvent(1) + claudeMessageDeltaEvent("tool_use") + claudeMessageStopEvent()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, stream)
+	}))
+	defer upstream.Close()
+	base, _, stop := startServerCfg(t, Config{UpstreamBase: upstream.URL, Detectors: []Detector{}, GuardClaudeToolCorruption: true})
+	defer stop()
+	resp, err := http.Post(base+"/v1/messages", "application/json", strings.NewReader(`{"stream":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if bytes.Contains(body, []byte("court")) || !bytes.Contains(body, []byte(`"type":"tool_use"`)) {
+		t.Fatalf("split pollution was not filtered safely: %s", body)
+	}
+}
+
+func TestServerClaudeGuardDetectsSplitPollutionAcrossPing(t *testing.T) {
+	stream := sseTextEvent(0, "court ") + "event: ping\ndata: {\"type\":\"ping\"}\n\n" + sseTextEvent(0, "court ") + sseTextEvent(0, "court") +
+		claudeMessageDeltaEvent("tool_use") + claudeMessageStopEvent()
+	body := guardedClaudeResponse(t, stream)
+	if bytes.Contains(body, []byte("court")) {
+		t.Fatalf("ping-separated pollution leaked: %s", body)
+	}
+}
+
+func TestServerClaudeGuardPreservesInterruptedControlWords(t *testing.T) {
+	clean := sseTextEvent(0, "court ") + sseTextEvent(0, "normal text ") +
+		sseTextEvent(0, "court court") + claudeMessageDeltaEvent("end_turn") + claudeMessageStopEvent()
+	body := guardedClaudeResponse(t, clean)
+	if !bytes.Equal(body, []byte(clean)) {
+		t.Fatalf("non-consecutive control words changed:\n got %q\nwant %q", body, clean)
+	}
+}
+
+func TestServerClaudeGuardFlushesUnconfirmedCandidateAtEOF(t *testing.T) {
+	clean := sseTextEvent(0, "The court")
+	body := guardedClaudeResponse(t, clean)
+	if !bytes.Equal(body, []byte(clean)) {
+		t.Fatalf("unconfirmed EOF candidate changed:\n got %q\nwant %q", body, clean)
+	}
+}
+
+func guardedClaudeResponse(t *testing.T, stream string) []byte {
+	t.Helper()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, stream)
+	}))
+	defer upstream.Close()
+	base, _, stop := startServerCfg(t, Config{UpstreamBase: upstream.URL, Detectors: []Detector{}, GuardClaudeToolCorruption: true})
+	defer stop()
+	resp, err := http.Post(base+"/v1/messages", "application/json", strings.NewReader(`{"stream":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func TestServerClaudeGuardPreservesLegitimateRepeatedWords(t *testing.T) {
+	clean := sseTextEvent(0, "Call the first function, then call the second.") +
+		claudeMessageDeltaEvent("end_turn") + claudeMessageStopEvent()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, clean)
+	}))
+	defer upstream.Close()
+	base, _, stop := startServerCfg(t, Config{UpstreamBase: upstream.URL, Detectors: []Detector{}, GuardClaudeToolCorruption: true})
+	defer stop()
+	resp, err := http.Post(base+"/v1/messages", "application/json", strings.NewReader(`{"stream":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if !bytes.Equal(body, []byte(clean)) {
+		t.Fatalf("legitimate repeated words changed:\n got %q\nwant %q", body, clean)
+	}
+}
+
+func TestServerClaudeGuardPreservesFencedExampleSplitAcrossDeltas(t *testing.T) {
+	clean := sseTextEvent(0, "```text\n") + sseTextEvent(0, "court court court\n") +
+		sseTextEvent(0, "```\n") + claudeMessageDeltaEvent("end_turn") + claudeMessageStopEvent()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, clean)
+	}))
+	defer upstream.Close()
+	base, _, stop := startServerCfg(t, Config{UpstreamBase: upstream.URL, Detectors: []Detector{}, GuardClaudeToolCorruption: true})
+	defer stop()
+	resp, err := http.Post(base+"/v1/messages", "application/json", strings.NewReader(`{"stream":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if !bytes.Equal(body, []byte(clean)) {
+		t.Fatalf("split fenced example changed:\n got %q\nwant %q", body, clean)
+	}
+}
 
 func claudeMessageDeltaEvent(stopReason string) string {
 	b, _ := json.Marshal(map[string]any{
@@ -99,8 +299,8 @@ func TestClaudeGuardAllowsLiteralExamplesInsideMarkdownCode(t *testing.T) {
 	}
 }
 
-func TestServerClaudeGuardRejectsPollutionBeforeWritingAnySSE(t *testing.T) {
-	polluted := sseTextEvent(0, "Checking now.\n\ncourse\n\ncourse") +
+func TestServerClaudeGuardDropsPollutedTextEvent(t *testing.T) {
+	polluted := sseTextEvent(0, "Checking now.\n\ncourse\n\ncourse\n\ncourse") +
 		claudeMessageDeltaEvent("tool_use") + claudeMessageStopEvent()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -122,23 +322,20 @@ func TestServerClaudeGuardRejectsPollutionBeforeWritingAnySSE(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 529 {
-		t.Fatalf("status = %d, want retryable 529; body=%s", resp.StatusCode, body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want streamed 200; body=%s", resp.StatusCode, body)
 	}
-	if got := resp.Header.Get("X-Should-Retry"); got != "true" {
-		t.Fatalf("X-Should-Retry = %q, want true", got)
-	}
-	if bytes.Contains(body, []byte("course")) || bytes.Contains(body, []byte("<invoke")) ||
-		bytes.Contains(body, []byte("text/event-stream")) {
+	if bytes.Contains(body, []byte("course")) || bytes.Contains(body, []byte("<invoke")) {
 		t.Fatalf("polluted SSE leaked to client: %s", body)
+	}
+	if !bytes.Contains(body, []byte(`"stop_reason":"tool_use"`)) {
+		t.Fatalf("clean terminal events were lost: %s", body)
 	}
 }
 
-func TestServerClaudeGuardRetriesOnceWithoutExposingRejectedAttempt(t *testing.T) {
-	polluted := sseTextEvent(0, "Checking now.\n\ncourse\n\ncourse") +
+func TestServerClaudeGuardDoesNotReplayRequestAfterFilteringPollution(t *testing.T) {
+	polluted := sseTextEvent(0, "Checking now.\n\ncourse\n\ncourse\n\ncourse") +
 		claudeMessageDeltaEvent("tool_use") + claudeMessageStopEvent()
-	clean := sseTextEvent(0, "Clean retry") +
-		claudeMessageDeltaEvent("end_turn") + claudeMessageStopEvent()
 	var mu sync.Mutex
 	var bodies [][]byte
 	var authHeaders []string
@@ -147,15 +344,10 @@ func TestServerClaudeGuardRetriesOnceWithoutExposingRejectedAttempt(t *testing.T
 		mu.Lock()
 		bodies = append(bodies, body)
 		authHeaders = append(authHeaders, r.Header.Get("Authorization"))
-		attempt := len(bodies)
 		mu.Unlock()
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
-		if attempt == 1 {
-			_, _ = io.WriteString(w, polluted)
-			return
-		}
-		_, _ = io.WriteString(w, clean)
+		_, _ = io.WriteString(w, polluted)
 	}))
 	defer upstream.Close()
 
@@ -179,16 +371,13 @@ func TestServerClaudeGuardRetriesOnceWithoutExposingRejectedAttempt(t *testing.T
 	}
 	defer resp.Body.Close()
 	got, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want clean retry 200; body=%s", resp.StatusCode, got)
-	}
-	if !bytes.Equal(got, []byte(clean)) {
-		t.Fatalf("client received rejected attempt or changed retry:\n got %q\nwant %q", got, clean)
+	if resp.StatusCode != http.StatusOK || bytes.Contains(got, []byte("course")) {
+		t.Fatalf("filtered response status=%d body=%s", resp.StatusCode, got)
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(bodies) != 2 {
-		t.Fatalf("upstream attempts = %d, want 2", len(bodies))
+	if len(bodies) != 1 {
+		t.Fatalf("upstream attempts = %d, want 1", len(bodies))
 	}
 	for i := range bodies {
 		if string(bodies[i]) != reqBody {

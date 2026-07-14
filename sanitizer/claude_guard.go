@@ -1,19 +1,204 @@
 package sanitizer
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
+	"io"
 	"regexp"
 	"strings"
 )
 
 var claudeGuardInlineCode = regexp.MustCompile("`[^`\\n]*`")
 
-// anthropicSSEHasToolCallCorruption recognizes the stable Opus 4.8 failure
-// where a tool call is serialized into the assistant text channel instead of
-// a structured tool_use block. The caller supplies one complete Anthropic SSE
-// response; buffering is intentional because no response bytes may reach
-// Claude Code before the terminal stop_reason has been validated.
+type claudeGuardStream struct {
+	source     io.ReadCloser
+	reader     *bufio.Reader
+	pending    []byte
+	held       []byte
+	blockText  strings.Builder
+	guardBlock bool
+	polluted   bool
+}
+
+const maxClaudeGuardEventBytes = 16 << 20
+const maxClaudeGuardBlockText = 1 << 20
+const maxClaudeGuardHeldBytes = 2 << 20
+
+func newClaudeGuardStream(source io.ReadCloser) io.ReadCloser {
+	return &claudeGuardStream{source: source, reader: bufio.NewReader(source), guardBlock: true}
+}
+
+func (s *claudeGuardStream) Read(p []byte) (int, error) {
+	for len(s.pending) == 0 {
+		event, err := readClaudeSSEEvent(s.reader)
+		if len(event) > 0 {
+			s.consume(event)
+		}
+		if err != nil {
+			if len(s.pending) == 0 && len(s.held) > 0 && !s.polluted {
+				s.flushHeld()
+			}
+			if len(s.pending) == 0 {
+				return 0, err
+			}
+			break
+		}
+	}
+	n := copy(p, s.pending)
+	s.pending = s.pending[n:]
+	return n, nil
+}
+
+func (s *claudeGuardStream) consume(event []byte) {
+	eventType, text, isText := claudeSSEEventText(event)
+	switch eventType {
+	case "content_block_start":
+		s.flushHeld()
+		s.blockText.Reset()
+		s.guardBlock = true
+		s.polluted = false
+	case "content_block_stop":
+		if !s.polluted {
+			s.flushHeld()
+		}
+		s.held = nil
+		s.blockText.Reset()
+		s.guardBlock = false
+		s.polluted = false
+	}
+	if !isText || !s.guardBlock {
+		if len(s.held) > 0 && (eventType == "" || eventType == "ping") {
+			s.hold(event)
+			return
+		}
+		if !s.polluted {
+			s.flushHeld()
+		}
+		s.pending = append(s.pending, event...)
+		return
+	}
+	if s.polluted {
+		return
+	}
+	if s.blockText.Len()+len(text) > maxClaudeGuardBlockText {
+		s.flushHeld()
+		s.guardBlock = false
+		s.pending = append(s.pending, event...)
+		return
+	}
+	s.blockText.WriteString(text)
+	if claudeTextHasStrongPollution(s.blockText.String()) {
+		s.held = nil
+		s.polluted = true
+		return
+	}
+	if claudeTextHasPollutionCandidate(text) || len(s.held) > 0 {
+		s.hold(event)
+		return
+	}
+	s.pending = append(s.pending, event...)
+}
+
+func (s *claudeGuardStream) hold(event []byte) {
+	if len(s.held)+len(event) > maxClaudeGuardHeldBytes {
+		s.flushHeld()
+		s.guardBlock = false
+		s.pending = append(s.pending, event...)
+		return
+	}
+	s.held = append(s.held, event...)
+}
+
+func (s *claudeGuardStream) flushHeld() {
+	s.pending = append(s.pending, s.held...)
+	s.held = nil
+}
+
+func (s *claudeGuardStream) Close() error { return s.source.Close() }
+
+func readClaudeSSEEvent(reader *bufio.Reader) ([]byte, error) {
+	var event []byte
+	for {
+		line, err := reader.ReadSlice('\n')
+		event = append(event, line...)
+		if len(event) >= maxClaudeGuardEventBytes {
+			return event, nil
+		}
+		if bytes.Equal(line, []byte("\n")) || bytes.Equal(line, []byte("\r\n")) {
+			return event, err
+		}
+		if err == bufio.ErrBufferFull {
+			continue
+		}
+		if err != nil {
+			return event, err
+		}
+	}
+}
+
+func claudeSSEEventText(raw []byte) (eventType, text string, isText bool) {
+	data, ok := sseEventData(raw)
+	if !ok {
+		return "", "", false
+	}
+	var event struct {
+		Type  string `json:"type"`
+		Delta struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"delta"`
+	}
+	if json.Unmarshal(data, &event) != nil {
+		return "", "", false
+	}
+	return event.Type, event.Delta.Text,
+		event.Type == "content_block_delta" && event.Delta.Type == "text_delta"
+}
+
+func claudeTextHasPollutionCandidate(text string) bool {
+	lower := strings.ToLower(text)
+	for _, marker := range []string{"course", "court", "課", "invoke name", "parameter name", "antml:"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func claudeTextHasStrongPollution(text string) bool {
+	visible := stripClaudeGuardMarkdownCode(text)
+	if invoke := strings.Index(visible, `invoke name="`); invoke >= 0 &&
+		strings.Contains(visible[invoke:], `parameter name=`) {
+		return true
+	}
+	if strings.Contains(visible, "The model's tool call could not be parsed (retry also failed).") {
+		return true
+	}
+	previous := ""
+	repeated := 0
+	for _, word := range strings.Fields(strings.ToLower(visible)) {
+		word = strings.Trim(word, `.,:;!?"'()[]{}<>`)
+		switch word {
+		case "course", "court", "課":
+			if word == previous {
+				repeated++
+			} else {
+				previous, repeated = word, 1
+			}
+			if repeated >= 3 {
+				return true
+			}
+		default:
+			previous, repeated = "", 0
+		}
+	}
+	return false
+}
+
+// anthropicSSEHasToolCallCorruption recognizes the stable Opus 4.8 failure in
+// complete captured streams. Production forwarding uses claudeGuardStream's
+// event-level detector so clean responses retain streaming latency.
 func anthropicSSEHasToolCallCorruption(stream []byte) bool {
 	var text strings.Builder
 	stopReason := ""

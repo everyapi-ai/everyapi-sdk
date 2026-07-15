@@ -140,6 +140,24 @@ func ConfigDir() (string, error) {
 	return filepath.Join(home, ".config", "everyapi"), nil
 }
 
+// EnsureLogPath resolves the config dir, creates it (0o700) if missing,
+// and returns the full path to a log file named `name` inside it. It
+// centralizes the "resolve dir → mkdir → join filename" boilerplate that
+// each on-disk log (sanitizer.log, use.log, the detached-proxy log)
+// otherwise repeats; callers still open the file themselves since they
+// differ in mode (append vs read-write) and lifetime (log.Logger,
+// inherited fd, locked single write).
+func EnsureLogPath(name string) (string, error) {
+	dir, err := ConfigDir()
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create config dir: %w", err)
+	}
+	return filepath.Join(dir, name), nil
+}
+
 func credentialsPath() (string, error) {
 	dir, err := ConfigDir()
 	if err != nil {

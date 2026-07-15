@@ -181,3 +181,27 @@ func TestDelete_Idempotent(t *testing.T) {
 		t.Errorf("Delete again (already removed): %v", err)
 	}
 }
+
+// TestEnsureLogPath verifies the shared log-path helper resolves under
+// the config dir, creates the dir if absent, and returns the joined path.
+func TestEnsureLogPath(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+
+	path, err := EnsureLogPath("use.log")
+	if err != nil {
+		t.Fatalf("EnsureLogPath: %v", err)
+	}
+	want := filepath.Join(tmp, "everyapi", "use.log")
+	if path != want {
+		t.Errorf("path = %q, want %q", path, want)
+	}
+	// The dir must now exist (a caller can open the file immediately).
+	if info, err := os.Stat(filepath.Dir(path)); err != nil || !info.IsDir() {
+		t.Errorf("config dir not created: err=%v", err)
+	}
+	// Idempotent: a second call with the dir already present succeeds.
+	if _, err := EnsureLogPath("sanitizer.log"); err != nil {
+		t.Errorf("second EnsureLogPath: %v", err)
+	}
+}

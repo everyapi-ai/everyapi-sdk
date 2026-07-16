@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/url"
 	"strconv"
+	"strings"
 )
 
 // LogEntry is the buyer-visible subset of a backend log row. Drops
@@ -88,12 +89,15 @@ type Pricing struct {
 	UsableGroup map[string]string  `json:"usable_group"`
 }
 
-// GroupInfo is one entry from /api/user/groups — the per-group
-// effective ratio (server formats this as either a number or a
-// label like "自动", hence `any`) and a human description.
+// GroupInfo is one canonical route-group entity from /api/user/groups.
+// ID is the stable routing/billing key, Name is display-only, and Usable is
+// the caller-specific permission projection. Ratio is numeric for concrete
+// groups and a label for the synthetic "auto" entry, hence `any`.
 type GroupInfo struct {
-	Ratio any    `json:"ratio"`
-	Desc  string `json:"desc"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Ratio  any    `json:"ratio"`
+	Usable bool   `json:"usable"`
 }
 
 // LogFilter narrows ListUserLogs. Zero fields mean "no constraint".
@@ -277,9 +281,9 @@ func (c *Client) UserModels(ctx context.Context) ([]UserModel, error) {
 	return out, nil
 }
 
-// UserGroups returns the routing groups the caller can use, keyed
-// by group name. Includes the special "auto" entry when the user is
-// allowed to use it.
+// UserGroups returns every configured route-group entity keyed by stable ID.
+// Callers display Name, send ID on the wire, and offer only Usable entities
+// for new selections. The special "auto" entity is included when configured.
 func (c *Client) UserGroups(ctx context.Context) (map[string]GroupInfo, error) {
 	var env struct {
 		Success bool                 `json:"success"`
@@ -291,6 +295,11 @@ func (c *Client) UserGroups(ctx context.Context) (map[string]GroupInfo, error) {
 	}
 	if !env.Success {
 		return nil, errors.New(env.Message)
+	}
+	for id, group := range env.Data {
+		if group.ID != id || strings.TrimSpace(group.Name) == "" {
+			return nil, errors.New("invalid route group response")
+		}
 	}
 	return env.Data, nil
 }

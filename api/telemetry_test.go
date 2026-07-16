@@ -145,18 +145,32 @@ func TestUserModels(t *testing.T) {
 func TestUserGroups(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"success":true,"data":{"default":{"ratio":1.0,"desc":"standard"},"auto":{"ratio":"自动","desc":"smart routing"}}}`))
+		w.Write([]byte(`{"success":true,"data":{"default":{"id":"default","name":"Standard route","ratio":1.0,"usable":true},"vip":{"id":"vip","name":"Stable route","ratio":0.8,"usable":false},"auto":{"id":"auto","name":"Automatic","ratio":"Auto","usable":true}}}`))
 	}))
 	defer srv.Close()
 	got, err := New(srv.URL, "acc").WithUserID(7).UserGroups(context.Background())
 	if err != nil {
 		t.Fatalf("UserGroups: %v", err)
 	}
-	if len(got) != 2 || got["default"].Desc != "standard" {
+	if len(got) != 3 || got["default"].Name != "Standard route" || !got["default"].Usable {
 		t.Errorf("got %+v", got)
 	}
-	if got["auto"].Ratio != "自动" {
+	if got["vip"].ID != "vip" || got["vip"].Usable {
+		t.Errorf("unusable entity was lost or rewritten: %+v", got["vip"])
+	}
+	if got["auto"].Ratio != "Auto" {
 		t.Errorf("auto group ratio (string) did not survive any-typed decode: %+v", got["auto"])
+	}
+}
+
+func TestUserGroupsRejectsLegacyDescriptionShape(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"success":true,"data":{"default":{"ratio":1.0,"desc":"standard"}}}`))
+	}))
+	defer srv.Close()
+	if _, err := New(srv.URL, "acc").UserGroups(context.Background()); err == nil {
+		t.Fatal("legacy route-group response unexpectedly accepted")
 	}
 }
 

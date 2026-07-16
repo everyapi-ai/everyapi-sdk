@@ -26,7 +26,7 @@ type AdminAntigravityOAuthStart struct {
 // StartAdminAntigravityOAuth kicks off an operator Antigravity OAuth flow
 // with the CLI-chosen loopback redirect. The backend validates redirectURI
 // is a real loopback URL before building the authorize URL. An empty group
-// lets the backend default it to "default".
+// lets the backend select its fixed fallback route group.
 func (c *Client) StartAdminAntigravityOAuth(ctx context.Context, name, models, group, redirectURI string) (*AdminAntigravityOAuthStart, error) {
 	body := map[string]string{
 		"name":         name,

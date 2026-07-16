@@ -143,20 +143,22 @@ func TestUserModels(t *testing.T) {
 }
 
 func TestUserGroups(t *testing.T) {
+	fallbackID := "grp_M3K-NEhOUc"
+	stableID := "grp_vNuaE45CEx"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"success":true,"data":{"default":{"id":"default","name":"Standard route","ratio":1.0,"usable":true},"vip":{"id":"vip","name":"Stable route","ratio":0.8,"usable":false},"auto":{"id":"auto","name":"Automatic","ratio":"Auto","usable":true}}}`))
+		w.Write([]byte(`{"success":true,"data":{"grp_M3K-NEhOUc":{"id":"grp_M3K-NEhOUc","name":"Standard route","ratio":1.0,"usable":true},"grp_vNuaE45CEx":{"id":"grp_vNuaE45CEx","name":"Stable route","ratio":0.8,"usable":false},"auto":{"id":"auto","name":"Automatic","ratio":"Auto","usable":true}}}`))
 	}))
 	defer srv.Close()
 	got, err := New(srv.URL, "acc").WithUserID(7).UserGroups(context.Background())
 	if err != nil {
 		t.Fatalf("UserGroups: %v", err)
 	}
-	if len(got) != 3 || got["default"].Name != "Standard route" || !got["default"].Usable {
+	if len(got) != 3 || got[fallbackID].Name != "Standard route" || !got[fallbackID].Usable {
 		t.Errorf("got %+v", got)
 	}
-	if got["vip"].ID != "vip" || got["vip"].Usable {
-		t.Errorf("unusable entity was lost or rewritten: %+v", got["vip"])
+	if got[stableID].ID != stableID || got[stableID].Usable {
+		t.Errorf("unusable entity was lost or rewritten: %+v", got[stableID])
 	}
 	if got["auto"].Ratio != "Auto" {
 		t.Errorf("auto group ratio (string) did not survive any-typed decode: %+v", got["auto"])
@@ -166,7 +168,7 @@ func TestUserGroups(t *testing.T) {
 func TestUserGroupsRejectsLegacyDescriptionShape(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"success":true,"data":{"default":{"ratio":1.0,"desc":"standard"}}}`))
+		w.Write([]byte(`{"success":true,"data":{"grp_M3K-NEhOUc":{"ratio":1.0,"desc":"standard"}}}`))
 	}))
 	defer srv.Close()
 	if _, err := New(srv.URL, "acc").UserGroups(context.Background()); err == nil {
@@ -179,7 +181,7 @@ func TestGetPricing(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		// /api/pricing returns flat fields (no success envelope) —
 		// the SDK decodes the response straight into Pricing.
-		w.Write([]byte(`{"data":[{"model_name":"gpt-4o","quota_type":0,"model_ratio":2.5,"completion_ratio":3,"owner_by":"openai"}],"group_ratio":{"default":1.0,"byteplus":0.8},"usable_group":{"default":"standard","byteplus":"BytePlus"}}`))
+		w.Write([]byte(`{"data":[{"model_name":"gpt-4o","quota_type":0,"model_ratio":2.5,"completion_ratio":3,"owner_by":"openai"}],"group_ratio":{"grp_M3K-NEhOUc":1.0,"grp_Byteplus01":0.8},"usable_group":{"grp_M3K-NEhOUc":"standard","grp_Byteplus01":"BytePlus"}}`))
 	}))
 	defer srv.Close()
 	p, err := New(srv.URL, "acc").WithUserID(7).GetPricing(context.Background())
@@ -189,7 +191,7 @@ func TestGetPricing(t *testing.T) {
 	if len(p.Rows) != 1 || p.Rows[0].ModelName != "gpt-4o" || p.Rows[0].ModelRatio != 2.5 {
 		t.Errorf("rows: %+v", p.Rows)
 	}
-	if p.GroupRatio["byteplus"] != 0.8 || p.UsableGroup["byteplus"] != "BytePlus" {
+	if p.GroupRatio["grp_Byteplus01"] != 0.8 || p.UsableGroup["grp_Byteplus01"] != "BytePlus" {
 		t.Errorf("group fields: ratio=%v usable=%v", p.GroupRatio, p.UsableGroup)
 	}
 }

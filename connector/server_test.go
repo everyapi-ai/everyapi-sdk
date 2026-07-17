@@ -1,10 +1,12 @@
 package connector
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"io"
@@ -225,6 +227,290 @@ func TestServerPassesUnregisteredHTTPSHostThroughWithoutMITM(t *testing.T) {
 	}
 }
 
+func TestServerTunnelsThroughParentProxyForUnregisteredHost(t *testing.T) {
+	t.Parallel()
+
+	destination := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "via-proxy")
+	}))
+	defer destination.Close()
+	destinationURL, _ := url.Parse(destination.URL)
+
+	// A minimal CONNECT proxy: accept the tunnel, record which authority the
+	// connector asked for and whether it forwarded Proxy-Authorization, then
+	// splice raw bytes to the real destination.
+	var (
+		mu             sync.Mutex
+		sawConnectHost string
+		sawProxyAuth   string
+	)
+	proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxyListener.Close()
+	go func() {
+		for {
+			client, acceptErr := proxyListener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go func() {
+				br := bufio.NewReader(client)
+				req, readErr := http.ReadRequest(br)
+				if readErr != nil {
+					_ = client.Close()
+					return
+				}
+				mu.Lock()
+				sawConnectHost = req.Host
+				sawProxyAuth = req.Header.Get("Proxy-Authorization")
+				mu.Unlock()
+				if req.Method != http.MethodConnect {
+					_, _ = io.WriteString(client, "HTTP/1.1 405 Method Not Allowed\r\n\r\n")
+					_ = client.Close()
+					return
+				}
+				target, dialErr := net.Dial("tcp", req.Host)
+				if dialErr != nil {
+					_, _ = io.WriteString(client, "HTTP/1.1 502 Bad Gateway\r\n\r\n")
+					_ = client.Close()
+					return
+				}
+				_, _ = io.WriteString(client, "HTTP/1.1 200 Connection Established\r\n\r\n")
+				go func() { _, _ = io.Copy(target, br); _ = target.Close() }()
+				_, _ = io.Copy(client, target)
+				_ = client.Close()
+			}()
+		}
+	}()
+
+	proxyURLParsed := &url.URL{
+		Scheme: "http",
+		Host:   proxyListener.Addr().String(),
+		User:   url.UserPassword("proxyuser", "proxypass"),
+	}
+	registry, err := NewRegistry(DefaultTargets())
+	if err != nil {
+		t.Fatal(err)
+	}
+	unused := httptest.NewServer(http.NotFoundHandler())
+	defer unused.Close()
+	server, err := New(Config{UpstreamBase: unused.URL, RelayToken: "relay", Registry: registry})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	// Inject the parent proxy instead of touching process-wide env, which
+	// http.ProxyFromEnvironment caches in a sync.Once.
+	server.proxyForRequest = func(*http.Request) (*url.URL, error) { return proxyURLParsed, nil }
+	proxyURL, _, stop := serveTestConnector(t, server)
+	defer stop()
+
+	client := destination.Client()
+	connectorProxy, _ := url.Parse(proxyURL)
+	client.Transport = &http.Transport{
+		Proxy:           http.ProxyURL(connectorProxy),
+		TLSClientConfig: &tls.Config{RootCAs: destination.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs},
+	}
+	resp, err := client.Get("https://" + destinationURL.Host + "/x")
+	if err != nil {
+		t.Fatalf("GET through connector+proxy: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if string(body) != "via-proxy" {
+		t.Fatalf("body = %q, want via-proxy", body)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if sawConnectHost != destinationURL.Host {
+		t.Fatalf("proxy saw CONNECT %q, want %q", sawConnectHost, destinationURL.Host)
+	}
+	wantAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("proxyuser:proxypass"))
+	if sawProxyAuth != wantAuth {
+		t.Fatalf("proxy saw Proxy-Authorization %q, want %q", sawProxyAuth, wantAuth)
+	}
+}
+
+// TestDialViaHTTPProxyTimesOutOnStalledProxy pins the setup bound: a proxy that
+// accepts the TCP connection and then goes silent must fail the tunnel, not
+// wedge the handler goroutine forever. net.Dialer.Timeout does not cover this —
+// it bounds only the TCP connect — so before the setup deadline this blocked
+// indefinitely in http.ReadResponse.
+func TestDialViaHTTPProxyTimesOutOnStalledProxy(t *testing.T) {
+	t.Parallel()
+
+	stalled, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stalled.Close()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		defer close(accepted) // never leave the receive below blocked forever
+		c, acceptErr := stalled.Accept()
+		if acceptErr != nil {
+			return
+		}
+		accepted <- c // hold it open, answer nothing
+	}()
+
+	registry, err := NewRegistry(DefaultTargets())
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(Config{UpstreamBase: "https://gateway.example", RelayToken: "relay", Registry: registry})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	server.proxyForRequest = func(*http.Request) (*url.URL, error) {
+		return &url.URL{Scheme: "http", Host: stalled.Addr().String()}, nil
+	}
+	server.proxySetupTimeout = 100 * time.Millisecond
+
+	done := make(chan error, 1)
+	go func() {
+		_, dialErr := server.dialTunnel("example.com:443")
+		done <- dialErr
+	}()
+	select {
+	case dialErr := <-done:
+		if dialErr == nil {
+			t.Fatal("dialTunnel returned nil error for a stalled proxy; expected a timeout")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("dialTunnel never returned for a stalled proxy — CONNECT setup is unbounded")
+	}
+	if c := <-accepted; c != nil { // closed channel yields nil if Accept failed
+		_ = c.Close()
+	}
+}
+
+// TestDialViaHTTPProxyClearsSetupDeadlineOnReturnedTunnel guards the other half
+// of the setup bound: the returned conn is a long-lived tunnel (the child's own
+// TLS session, possibly a multi-minute SSE stream), so it must NOT inherit the
+// setup deadline — otherwise every proxied tunnel would die once it elapsed.
+func TestDialViaHTTPProxyClearsSetupDeadlineOnReturnedTunnel(t *testing.T) {
+	t.Parallel()
+
+	target, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	go func() {
+		for {
+			c, acceptErr := target.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go func(c net.Conn) {
+				// Answer well after the (deliberately tiny) setup deadline, so a
+				// leaked deadline surfaces as a read failure below.
+				time.Sleep(300 * time.Millisecond)
+				_, _ = io.WriteString(c, "late")
+				_ = c.Close()
+			}(c)
+		}
+	}()
+
+	proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxyListener.Close()
+	go func() {
+		client, acceptErr := proxyListener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		br := bufio.NewReader(client)
+		req, readErr := http.ReadRequest(br)
+		if readErr != nil {
+			_ = client.Close()
+			return
+		}
+		upstream, dialErr := net.Dial("tcp", req.Host)
+		if dialErr != nil {
+			_ = client.Close()
+			return
+		}
+		_, _ = io.WriteString(client, "HTTP/1.1 200 Connection Established\r\n\r\n")
+		go func() { _, _ = io.Copy(upstream, br) }()
+		_, _ = io.Copy(client, upstream)
+		_ = client.Close()
+	}()
+
+	registry, err := NewRegistry(DefaultTargets())
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(Config{UpstreamBase: "https://gateway.example", RelayToken: "relay", Registry: registry})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	server.proxyForRequest = func(*http.Request) (*url.URL, error) {
+		return &url.URL{Scheme: "http", Host: proxyListener.Addr().String()}, nil
+	}
+	// Short enough that a leaked deadline kills the read long before the write.
+	server.proxySetupTimeout = 50 * time.Millisecond
+
+	conn, err := server.dialTunnel(target.Addr().String())
+	if err != nil {
+		t.Fatalf("dialTunnel: %v", err)
+	}
+	defer conn.Close()
+
+	body, err := io.ReadAll(conn)
+	if err != nil {
+		t.Fatalf("tunnel read failed — the setup deadline leaked onto the returned conn: %v", err)
+	}
+	if string(body) != "late" {
+		t.Fatalf("tunnel body = %q, want %q", body, "late")
+	}
+}
+
+func TestDialTunnelFallsBackToDirectForSocksProxy(t *testing.T) {
+	t.Parallel()
+
+	// A real listener so the direct-dial fallback actually connects.
+	dest, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dest.Close()
+	go func() {
+		for {
+			c, acceptErr := dest.Accept()
+			if acceptErr != nil {
+				return
+			}
+			_ = c.Close()
+		}
+	}()
+
+	registry, err := NewRegistry(DefaultTargets())
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(Config{UpstreamBase: "https://gateway.example", RelayToken: "relay", Registry: registry})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	// An unsupported (SOCKS) proxy scheme must not error — the connector
+	// falls back to the pre-proxy-support direct dial rather than newly
+	// breaking a user whose direct route works.
+	server.proxyForRequest = func(*http.Request) (*url.URL, error) {
+		return &url.URL{Scheme: "socks5", Host: "127.0.0.1:1080"}, nil
+	}
+	conn, err := server.dialTunnel(dest.Addr().String())
+	if err != nil {
+		t.Fatalf("dialTunnel with socks proxy should fall back to direct, got error: %v", err)
+	}
+	_ = conn.Close()
+}
+
 func TestServerDoesNotFallBackToOfficialOriginWhenRelayFails(t *testing.T) {
 	t.Parallel()
 
@@ -394,9 +680,27 @@ func TestCertificateAuthorityIsEphemeralPublicAndPathConstrained(t *testing.T) {
 	if !cert.MaxPathLenZero || cert.MaxPathLen != 0 {
 		t.Fatalf("CA path constraint = MaxPathLenZero %v MaxPathLen %d, want explicit zero", cert.MaxPathLenZero, cert.MaxPathLen)
 	}
+	// This bound was 25h, encoding "ephemeral" as "short-lived". It has been
+	// relaxed to CertificateLifetime deliberately, because that reading cost
+	// more than it bought once transparent mode became the default: the child
+	// pins this CA at launch and never re-reads it, so a 24h CA hard-killed
+	// every session that ran overnight with an unrecoverable CERT_HAS_EXPIRED.
+	//
+	// What actually bounds the risk is not NotAfter but the private key's
+	// lifetime, and that is unchanged: the key is generated per-process, is
+	// never written to disk, is never returned by CACertificatePEM (asserted
+	// above), and dies with the session. A stolen ca-*.pem is a public
+	// certificate and cannot sign anything. So the window in which this CA can
+	// be abused is the process's lifetime either way — extending NotAfter does
+	// not widen it, it only stops the CA from expiring out from under a session
+	// that is still running.
+	//
+	// The properties that carry the real weight — key never exported, IsCA with
+	// an explicit zero path constraint, single-cert PEM — are asserted above and
+	// stay untouched.
 	validity := cert.NotAfter.Sub(cert.NotBefore)
-	if validity > 25*time.Hour {
-		t.Fatalf("CA validity = %s, want at most 25h", validity)
+	if validity > CertificateLifetime+time.Hour {
+		t.Fatalf("CA validity = %s, want at most CertificateLifetime (%s) plus slack", validity, CertificateLifetime)
 	}
 }
 
@@ -418,8 +722,19 @@ func TestLeafCertificateIsLimitedToRequestedHost(t *testing.T) {
 	if len(leaf.DNSNames) != 1 || leaf.DNSNames[0] != "api.openai.com" {
 		t.Fatalf("leaf DNS SANs = %v", leaf.DNSNames)
 	}
-	if leaf.IsCA || leaf.NotAfter.Sub(leaf.NotBefore) > 25*time.Hour {
-		t.Fatalf("unsafe leaf constraints: IsCA=%v validity=%s", leaf.IsCA, leaf.NotAfter.Sub(leaf.NotBefore))
+	// A leaf must never be a CA — that is the load-bearing constraint here and
+	// it is asserted on its own so a validity change can never silently relax
+	// it.
+	if leaf.IsCA {
+		t.Fatalf("leaf is a CA: %v", leaf.IsCA)
+	}
+	// Validity tracks CertificateLifetime for the same reason the CA's does:
+	// leaves are cached for the process's lifetime with no expiry re-check, so
+	// a leaf shorter than its session breaks that session exactly as an expired
+	// CA would. See TestCertificateAuthorityIsEphemeralPublicAndPathConstrained
+	// for why bounding NotAfter is not what bounds the risk.
+	if v := leaf.NotAfter.Sub(leaf.NotBefore); v > CertificateLifetime+time.Hour {
+		t.Fatalf("leaf validity = %s, want at most CertificateLifetime (%s) plus slack", v, CertificateLifetime)
 	}
 	roots := x509.NewCertPool()
 	roots.AddCert(server.caCert)
@@ -534,5 +849,102 @@ func proxyClient(proxyURL string, roots *x509.CertPool) *http.Client {
 			TLSClientConfig: &tls.Config{RootCAs: roots},
 		},
 		Timeout: 5 * time.Second,
+	}
+}
+
+// TestCertificateLifetimeOutlivesALongSession pins the bound that decides how
+// long a transparent session can run. The child pins the CA at launch and never
+// re-reads it, so the CA cannot be rotated mid-session; when it expires, every
+// new TLS connection fails with CERT_HAS_EXPIRED and the session cannot
+// self-heal. At the original 24h this killed any session left running overnight
+// — which, now that transparent mode is the default, is every user's default
+// fate rather than an opt-in tester's.
+//
+// Leaves are asserted alongside the CA because they are cached for the
+// process's lifetime with no expiry re-check: a leaf shorter than its CA would
+// reintroduce exactly the same death, one level down.
+func TestCertificateLifetimeOutlivesALongSession(t *testing.T) {
+	t.Parallel()
+
+	const aLongSession = 7 * 24 * time.Hour // a week in a tmux pane
+	if CertificateLifetime < aLongSession {
+		t.Fatalf("CertificateLifetime = %v, too short to outlive a %v session", CertificateLifetime, aLongSession)
+	}
+
+	registry, err := NewRegistry(DefaultTargets())
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(Config{UpstreamBase: "https://gateway.example", RelayToken: "relay", Registry: registry})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	deadline := time.Now().Add(aLongSession)
+	if server.caCert.NotAfter.Before(deadline) {
+		t.Errorf("CA NotAfter = %v, expires before a %v session ends", server.caCert.NotAfter, aLongSession)
+	}
+	leaf, err := server.certificateForHost("api.anthropic.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := x509.ParseCertificate(leaf.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.NotAfter.Before(deadline) {
+		t.Errorf("leaf NotAfter = %v, expires before a %v session ends (cached leaves are never re-minted)", parsed.NotAfter, aLongSession)
+	}
+	if parsed.NotAfter.After(server.caCert.NotAfter) {
+		t.Errorf("leaf NotAfter %v outlives its CA %v", parsed.NotAfter, server.caCert.NotAfter)
+	}
+}
+
+// TestTunnelProxyProbesWithHTTPSSchemeAndDestinationHost covers the production
+// resolver path that every other proxy test injects away. tunnelProxy's whole
+// job is to hand http.ProxyFromEnvironment a request shaped so the CONNECT
+// destination resolves against HTTPS_PROXY (the tunnel carries the client's
+// TLS) while NO_PROXY exclusions still apply to the real destination host — and
+// with server.proxyForRequest stubbed in the other tests, nothing verified the
+// probe was built that way. A probe with the wrong scheme would silently match
+// HTTP_PROXY instead; one with the wrong host would defeat NO_PROXY.
+//
+// The probe is captured rather than asserted through the real
+// ProxyFromEnvironment because that function caches the environment in a
+// process-wide sync.Once, so a t.Setenv here would race every parallel test.
+// Honoring NO_PROXY is then stdlib behavior, driven entirely by these two fields.
+func TestTunnelProxyProbesWithHTTPSSchemeAndDestinationHost(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewRegistry(DefaultTargets())
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(Config{UpstreamBase: "https://gateway.example", RelayToken: "relay", Registry: registry})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// New must wire the real resolver by default — the bug this guards is the
+	// production path never being reached at all.
+	if server.proxyForRequest == nil {
+		t.Fatal("New left proxyForRequest nil; the production resolver would never run")
+	}
+
+	var probe *http.Request
+	server.proxyForRequest = func(r *http.Request) (*url.URL, error) {
+		probe = r
+		return nil, nil
+	}
+	if _, err := server.tunnelProxy("api.anthropic.com:443"); err != nil {
+		t.Fatalf("tunnelProxy: %v", err)
+	}
+	if probe == nil || probe.URL == nil {
+		t.Fatal("tunnelProxy did not build a probe request")
+	}
+	if probe.URL.Scheme != "https" {
+		t.Errorf("probe scheme = %q, want https so the destination resolves against HTTPS_PROXY", probe.URL.Scheme)
+	}
+	if probe.URL.Host != "api.anthropic.com:443" {
+		t.Errorf("probe host = %q, want the CONNECT destination so NO_PROXY applies to it", probe.URL.Host)
 	}
 }

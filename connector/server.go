@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -25,10 +26,27 @@ import (
 
 type Config struct {
 	UpstreamBase string
-	RelayToken   string
-	Registry     *Registry
-	Transport    http.RoundTripper
-	Logger       *log.Logger
+
+	// RelayDestination is the origin relayed traffic ULTIMATELY reaches. It is
+	// normally identical to UpstreamBase, but a caller may chain an
+	// intermediate loopback proxy (the CLI puts the sanitizer between the
+	// connector and the gateway), in which case UpstreamBase is that hop and
+	// this stays the real gateway.
+	//
+	// The intercepted-origin loop guard below validates BOTH this and
+	// UpstreamBase. They are independent inputs and either one receiving the
+	// relay token is the leak the guard exists to stop: UpstreamBase is what
+	// roundTrip sends the token to, and this is where it ends up behind a
+	// chained hop. Guarding only the immediate hop would silently pass for
+	// every chained launch (a loopback hop is never an intercepted origin);
+	// guarding only this one would leave the hop that literally receives the
+	// token unchecked. Empty means "same as UpstreamBase".
+	RelayDestination string
+
+	RelayToken string
+	Registry   *Registry
+	Transport  http.RoundTripper
+	Logger     *log.Logger
 }
 
 type Server struct {
@@ -46,6 +64,25 @@ type Server struct {
 	connMu sync.Mutex
 	conns  map[net.Conn]struct{}
 	http   *http.Server
+
+	// serveCtx is the Serve() context. Requests only arrive after Serve
+	// stores it (below), so no lock guards it. roundTrip binds each upstream
+	// request to it so Serve's cancellation (shutdown) aborts in-flight
+	// upstream calls — it carries no deadline of its own, so a long SSE body
+	// is never cut short mid-stream.
+	serveCtx context.Context
+
+	// proxyForRequest resolves the parent-process proxy for a CONNECT tunnel
+	// destination (defaults to http.ProxyFromEnvironment). Kept as a field so
+	// tests can inject one without racing http.ProxyFromEnvironment's
+	// process-wide sync.Once env cache.
+	proxyForRequest func(*http.Request) (*url.URL, error)
+
+	// proxySetupTimeout bounds proxy tunnel setup (defaults to
+	// proxyConnectSetupTimeout). A field rather than a package var so a test
+	// can shorten it per-Server without mutating global state shared with
+	// parallel tests.
+	proxySetupTimeout time.Duration
 }
 
 func New(cfg Config) (*Server, error) {
@@ -65,8 +102,30 @@ func New(cfg Config) (*Server, error) {
 	if cfg.Registry == nil {
 		return nil, fmt.Errorf("connector target registry is required")
 	}
+	// Guard BOTH hops — see Config.RelayDestination. They are independent
+	// inputs and either one receiving the relay token is the leak this check
+	// exists to stop: UpstreamBase is what roundTrip actually sends the token
+	// to, and RelayDestination is where it ends up when a caller chains a
+	// loopback hop in between. An earlier version guarded only the destination
+	// once RelayDestination was set, which left UpstreamBase — the hop that
+	// literally receives the token — unvalidated for any SDK consumer.
 	if cfg.Registry.InterceptsHost(upstream.Hostname()) {
 		return nil, fmt.Errorf("connector relay upstream must not be an intercepted official origin")
+	}
+	if raw := strings.TrimSpace(cfg.RelayDestination); raw != "" {
+		destination, destErr := url.Parse(raw)
+		if destErr != nil {
+			return nil, fmt.Errorf("parse connector relay destination: %w", destErr)
+		}
+		if destination.Scheme != "https" && destination.Scheme != "http" {
+			return nil, fmt.Errorf("connector relay destination must use http or https")
+		}
+		if destination.Host == "" {
+			return nil, fmt.Errorf("connector relay destination host is required")
+		}
+		if cfg.Registry.InterceptsHost(destination.Hostname()) {
+			return nil, fmt.Errorf("connector relay destination must not be an intercepted official origin")
+		}
 	}
 	caCert, caKey, caPEM, err := newCertificateAuthority()
 	if err != nil {
@@ -76,6 +135,27 @@ func New(cfg Config) (*Server, error) {
 	if transport == nil {
 		base := http.DefaultTransport.(*http.Transport).Clone()
 		base.Proxy = http.ProxyFromEnvironment
+		// Bound the wait for the upstream's response headers so a stalled
+		// gateway (accepts the TCP/TLS connection, then never answers) can't
+		// wedge a roundTrip goroutine and its connection open forever. This
+		// caps only the time-to-first-byte of the response header — a
+		// streaming (SSE) body sends its 200 headers immediately and streams
+		// after, so long generations are unaffected. It is deliberately loose
+		// because a NON-streaming completion withholds its headers until the
+		// whole generation finishes, so a slow large
+		// response must still fit under the cap. It is a liveness backstop, not
+		// a request budget, so it sits well above any plausible generation
+		// rather than at the 5m the injected path's optional sanitizer applies:
+		// the plain injected path caps nothing at all, and a reasoning model
+		// answering non-streamed can legitimately run past five minutes.
+		// Capping tighter than the path this one replaces would turn a slow
+		// answer into a 502 users never saw before transparent became default.
+		//
+		// Note this is not the only cap on a chained launch: when --sanitize or
+		// the Claude recovery guard puts the sanitizer in front of the gateway,
+		// that proxy's own 5m RequestTimeout still bounds the relay leg, so the
+		// effective ceiling there is 5m, not this value.
+		base.ResponseHeaderTimeout = 15 * time.Minute
 		transport = base
 	}
 	logger := cfg.Logger
@@ -83,16 +163,18 @@ func New(cfg Config) (*Server, error) {
 		logger = log.New(io.Discard, "", 0)
 	}
 	s := &Server{
-		upstream:  upstream,
-		token:     cfg.RelayToken,
-		registry:  cfg.Registry,
-		transport: transport,
-		logger:    logger,
-		caCert:    caCert,
-		caKey:     caKey,
-		caPEM:     caPEM,
-		certs:     make(map[string]*tls.Certificate),
-		conns:     make(map[net.Conn]struct{}),
+		upstream:          upstream,
+		token:             cfg.RelayToken,
+		registry:          cfg.Registry,
+		transport:         transport,
+		logger:            logger,
+		caCert:            caCert,
+		caKey:             caKey,
+		caPEM:             caPEM,
+		certs:             make(map[string]*tls.Certificate),
+		conns:             make(map[net.Conn]struct{}),
+		proxyForRequest:   http.ProxyFromEnvironment,
+		proxySetupTimeout: proxyConnectSetupTimeout,
 	}
 	s.http = &http.Server{
 		Handler:           http.HandlerFunc(s.handleProxy),
@@ -114,6 +196,10 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 		_ = listener.Close()
 		return fmt.Errorf("connector refuses non-loopback listener %s", listener.Addr())
 	}
+	// Publish the serve context before accepting so roundTrip can bind
+	// upstream requests to it; requests can't arrive until http.Serve runs
+	// below, so this plain assignment races nothing.
+	s.serveCtx = ctx
 	done := make(chan struct{})
 	go func() {
 		select {
@@ -151,8 +237,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTunnel(w http.ResponseWriter, address string) {
-	upstream, err := (&net.Dialer{Timeout: 10 * time.Second}).Dial("tcp", address)
+	upstream, err := s.dialTunnel(address)
 	if err != nil {
+		s.logger.Printf("connector: tunnel dial to %s failed: %v", address, err)
 		http.Error(w, "connector direct tunnel failed", http.StatusBadGateway)
 		return
 	}
@@ -174,6 +261,154 @@ func (s *Server) handleTunnel(w http.ResponseWriter, address string) {
 		_, _ = io.CopyN(upstream, buffered, int64(buffered.Reader.Buffered()))
 	}
 	go s.pipeTunnel(client, upstream)
+}
+
+// dialTunnel opens the outbound leg of a pass-through CONNECT. It honors the
+// parent process's proxy settings (HTTPS_PROXY / NO_PROXY / …) so that after
+// transparent mode becomes the default, non-model HTTPS the child tools emit
+// — update checks, telemetry, HTTPS MCP servers — still reaches the internet
+// through a corporate proxy instead of being silently blackholed by an egress
+// firewall. With no proxy configured it dials the destination directly, exactly
+// as before.
+func (s *Server) dialTunnel(address string) (net.Conn, error) {
+	proxyURL, err := s.tunnelProxy(address)
+	if err != nil {
+		return nil, err
+	}
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	if proxyURL == nil {
+		return dialer.Dial("tcp", address)
+	}
+	if sc := strings.ToLower(proxyURL.Scheme); sc != "http" && sc != "https" {
+		// SOCKS proxies need golang.org/x/net/proxy, a dependency the SDK
+		// deliberately does not carry. Fall back to a direct dial — the
+		// pre-proxy-support behavior — rather than erroring, so a user whose
+		// HTTPS_PROXY is SOCKS but whose direct route works isn't newly
+		// broken. Log it so that when direct IS firewalled the connector.log
+		// explains why the tunnel failed instead of silently blackholing.
+		s.logger.Printf("connector: unsupported proxy scheme %q for tunnel to %s; dialing direct", proxyURL.Scheme, address)
+		return dialer.Dial("tcp", address)
+	}
+	return s.dialViaHTTPProxy(dialer, proxyURL, address)
+}
+
+// tunnelProxy resolves the proxy for a CONNECT destination. It probes with an
+// https:// URL so the resolver matches HTTPS_PROXY (the tunnel carries the
+// client's TLS), while still honoring NO_PROXY exclusions for the destination
+// host.
+func (s *Server) tunnelProxy(address string) (*url.URL, error) {
+	resolve := s.proxyForRequest
+	if resolve == nil {
+		resolve = http.ProxyFromEnvironment
+	}
+	probe := &http.Request{URL: &url.URL{Scheme: "https", Host: address}}
+	return resolve(probe)
+}
+
+// CertificateLifetime is how long the ephemeral CA — and every leaf it signs —
+// stays valid. It bounds how long a single `everyapi use` session can run: the
+// child pins this CA via NODE_EXTRA_CA_CERTS (etc.) at launch and never re-reads
+// it, so the CA cannot be rotated mid-session; once it expires, every new TLS
+// connection the child opens fails with CERT_HAS_EXPIRED and the session cannot
+// self-heal. It was 24h while transparent mode was opt-in, which silently killed
+// any session left running overnight — the common case for an agent in a tmux
+// pane, and now the default for every launch.
+//
+// A long window costs little: the CA is per-process and its private key never
+// leaves memory or outlives the session, and the cert is trusted only by this
+// one child (via an 0600 file), never installed in a system trust store.
+//
+// cmd.sweepStaleConnectorCABundles keys its reap floor off this value — a
+// bundle older than the CA's own validity can no longer belong to a session
+// doing useful work, however long that session has been up.
+const CertificateLifetime = 30 * 24 * time.Hour
+
+// proxyConnectSetupTimeout bounds the post-dial half of proxy tunnel setup: the
+// TLS handshake with the proxy, the CONNECT write, and the CONNECT response
+// read. net.Dialer.Timeout covers only the TCP connect, never subsequent I/O on
+// the returned conn, so without this a proxy that accepts the connection and
+// then goes silent would wedge the CONNECT handler goroutine (and its conn)
+// forever — the same unbounded-wait class ResponseHeaderTimeout closes on the
+// relay path. Matched to the dial timeout so tunnel setup still fails fast, like
+// the direct dial this path replaced.
+const proxyConnectSetupTimeout = 10 * time.Second
+
+// dialViaHTTPProxy connects to an HTTP(S) proxy and issues a CONNECT so the
+// proxy opens a raw tunnel to `address`. The proxy's own transport is HTTP for
+// an http:// proxy and TLS for an https:// one.
+func (s *Server) dialViaHTTPProxy(dialer *net.Dialer, proxyURL *url.URL, address string) (net.Conn, error) {
+	proxyHost := proxyURL.Host
+	if proxyURL.Port() == "" {
+		if proxyURL.Scheme == "https" {
+			proxyHost = net.JoinHostPort(proxyURL.Hostname(), "443")
+		} else {
+			proxyHost = net.JoinHostPort(proxyURL.Hostname(), "80")
+		}
+	}
+	conn, err := dialer.Dial("tcp", proxyHost)
+	if err != nil {
+		return nil, fmt.Errorf("dial proxy %s: %w", proxyHost, err)
+	}
+	// Bound every blocking step below; cleared before the conn is returned.
+	setupTimeout := s.proxySetupTimeout
+	if setupTimeout <= 0 {
+		setupTimeout = proxyConnectSetupTimeout
+	}
+	if err := conn.SetDeadline(time.Now().Add(setupTimeout)); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("set CONNECT setup deadline for proxy %s: %w", proxyHost, err)
+	}
+	if proxyURL.Scheme == "https" {
+		tlsConn := tls.Client(conn, &tls.Config{ServerName: proxyURL.Hostname(), MinVersion: tls.VersionTLS12})
+		if err := tlsConn.Handshake(); err != nil {
+			_ = conn.Close()
+			return nil, fmt.Errorf("TLS handshake with proxy %s: %w", proxyHost, err)
+		}
+		conn = tlsConn
+	}
+	connectReq := &http.Request{
+		Method: http.MethodConnect,
+		URL:    &url.URL{Opaque: address},
+		Host:   address,
+		Header: make(http.Header),
+	}
+	if user := proxyURL.User; user != nil {
+		password, _ := user.Password()
+		credential := base64.StdEncoding.EncodeToString([]byte(user.Username() + ":" + password))
+		connectReq.Header.Set("Proxy-Authorization", "Basic "+credential)
+	}
+	if err := connectReq.Write(conn); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("send CONNECT to proxy %s: %w", proxyHost, err)
+	}
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, connectReq)
+	if err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("read CONNECT response from proxy %s: %w", proxyHost, err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		_ = conn.Close()
+		return nil, fmt.Errorf("proxy %s refused CONNECT to %s: %s", proxyHost, address, resp.Status)
+	}
+	// The tunnel client (the child tool) sends its TLS ClientHello first, so a
+	// well-behaved proxy emits nothing after the CONNECT response headers.
+	// Bytes already buffered here would be lost when we hand back the raw conn,
+	// so refuse rather than silently drop them (matches net/http's Transport).
+	if br.Buffered() > 0 {
+		_ = conn.Close()
+		return nil, fmt.Errorf("proxy %s sent %d unexpected bytes after CONNECT", proxyHost, br.Buffered())
+	}
+	// Clear the setup deadline before handing the tunnel back: from here the
+	// conn carries the child's own TLS session for an unbounded lifetime (a
+	// long SSE stream, an idle MCP connection), and an inherited deadline would
+	// kill it mid-flight.
+	if err := conn.SetDeadline(time.Time{}); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("clear CONNECT setup deadline for proxy %s: %w", proxyHost, err)
+	}
+	return conn, nil
 }
 
 func (s *Server) pipeTunnel(client, upstream net.Conn) {
@@ -207,6 +442,7 @@ func (s *Server) handleIntercept(w http.ResponseWriter, host string) {
 	}
 	cert, err := s.certificateForHost(host)
 	if err != nil {
+		s.logger.Printf("connector: mint leaf certificate for %s failed: %v", host, err)
 		_ = client.Close()
 		return
 	}
@@ -223,6 +459,7 @@ func (s *Server) handleIntercept(w http.ResponseWriter, host string) {
 			s.trackConn(tlsConn, false)
 		}()
 		if err := tlsConn.Handshake(); err != nil {
+			s.logger.Printf("connector: TLS handshake with intercepted client for %s failed: %v", host, err)
 			return
 		}
 		s.serveInterceptedHTTP(tlsConn, host)
@@ -243,11 +480,13 @@ func (s *Server) serveInterceptedHTTP(conn net.Conn, officialHost string) {
 			if status == 0 {
 				status = http.StatusForbidden
 			}
-			_ = writeSyntheticResponse(conn, req, status, "connector blocked an unregistered model API route\n")
+			s.logger.Printf("connector: blocked %s %s%s (status %d)", req.Method, officialHost, req.URL.Path, status)
+			_ = writeSyntheticResponse(conn, req, status, "connector blocked a model API route that is not on its allowlist\n")
 			return
 		}
 		resp := s.roundTrip(req, officialHost, decision.Action)
 		if resp == nil {
+			s.logger.Printf("connector: upstream request %s %s%s (%s) failed", req.Method, officialHost, req.URL.Path, decision.Action)
 			_ = writeSyntheticResponse(conn, req, http.StatusBadGateway, "connector upstream request failed\n")
 			return
 		}
@@ -263,7 +502,11 @@ func (s *Server) serveInterceptedHTTP(conn net.Conn, officialHost string) {
 }
 
 func (s *Server) roundTrip(in *http.Request, officialHost string, action Action) *http.Response {
-	out := in.Clone(context.Background())
+	reqCtx := s.serveCtx
+	if reqCtx == nil {
+		reqCtx = context.Background()
+	}
+	out := in.Clone(reqCtx)
 	out.RequestURI = ""
 	out.URL.Scheme = "https"
 	out.URL.Host = officialHost
@@ -273,6 +516,13 @@ func (s *Server) roundTrip(in *http.Request, officialHost string, action Action)
 		out.URL.Scheme = s.upstream.Scheme
 		out.URL.Host = s.upstream.Host
 		out.URL.Path = joinURLPath(s.upstream.Path, in.URL.Path)
+		// Drop the client's pre-encoded form. URL.EscapedPath prefers RawPath
+		// whenever it is a valid escaping of Path, so leaving it would put the
+		// client's bytes on the wire instead of the path just joined — and the
+		// path Decide matched is the decoded one. Cleared only here, in the
+		// relay branch that rewrites Path; the pass-through branch leaves the
+		// client's encoding untouched on purpose.
+		out.URL.RawPath = ""
 		out.Host = s.upstream.Host
 		stripClientCredentials(out.Header)
 		stripClientQueryCredentials(out.URL)
@@ -392,7 +642,11 @@ func (s *Server) certificateForHost(host string) (*tls.Certificate, error) {
 	if err != nil {
 		return nil, err
 	}
-	notAfter := time.Now().Add(24 * time.Hour)
+	// Leaves are cached for the process's lifetime with no expiry re-check, so
+	// a leaf shorter-lived than the CA would expire inside the cache and break
+	// the session exactly as the old 24h CA did. Give them the CA's lifetime,
+	// clamped to the CA so a leaf can never outlive its signer.
+	notAfter := time.Now().Add(CertificateLifetime)
 	if s.caCert.NotAfter.Before(notAfter) {
 		notAfter = s.caCert.NotAfter
 	}
@@ -427,7 +681,7 @@ func newCertificateAuthority() (*x509.Certificate, *ecdsa.PrivateKey, []byte, er
 		SerialNumber:          serial,
 		Subject:               pkix.Name{CommonName: "EveryAPI Ephemeral Connector"},
 		NotBefore:             time.Now().Add(-time.Minute),
-		NotAfter:              time.Now().Add(24 * time.Hour),
+		NotAfter:              time.Now().Add(CertificateLifetime),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
 		BasicConstraintsValid: true,
 		IsCA:                  true,

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	stdpath "path"
 	"strings"
 )
 
@@ -103,8 +104,26 @@ func (r *Registry) Decide(host, method, path string) Decision {
 	if target == nil {
 		return Decision{Action: ActionDirect}
 	}
+	// A path that is not already canonical can never satisfy the relay
+	// allowlist. The allowlist matches the raw request path and roundTrip
+	// forwards that same raw path, so a dot segment would otherwise satisfy a
+	// Prefix rule while actually addressing somewhere else: POST
+	// /v1beta/models/../../v1beta/xx:generateContent matched the gemini prefix
+	// and was relayed with the token attached. No legitimate model API path
+	// contains a dot segment, so skipping the route loop is free.
+	//
+	// It must NOT short-circuit the whole function, though: paths outside every
+	// SensitivePrefix legitimately fall through to ActionDirect and never go
+	// near the relay token. Blocking them outright broke ordinary vendor
+	// traffic — Claude Code's own /api/event_logging/v2/batch/ and
+	// /api/claude_cli/bootstrap/ 400'd on nothing but a trailing slash.
+	cleaned := stdpath.Clean(path)
+	canonical := cleaned == path
 	method = strings.ToUpper(method)
 	for _, route := range target.Routes {
+		if !canonical {
+			break
+		}
 		if route.Method != "" && strings.ToUpper(route.Method) != method {
 			continue
 		}
@@ -119,8 +138,13 @@ func (r *Registry) Decide(host, method, path string) Decision {
 		}
 		return Decision{Action: route.Action, TargetName: target.Name, RejectStatus: route.RejectStatus}
 	}
+	// Match sensitive prefixes against the raw AND the cleaned path. Raw alone
+	// would let /api/../v1/messages dodge the /v1/messages prefix and reach the
+	// vendor directly — the connector forwards the raw path and the vendor
+	// normalizes it — which is the unregistered-model-route bypass these
+	// prefixes exist to stop.
 	for _, prefix := range target.SensitivePrefixes {
-		if strings.HasPrefix(path, prefix) {
+		if strings.HasPrefix(path, prefix) || strings.HasPrefix(cleaned, prefix) {
 			return Decision{Action: ActionBlock, TargetName: target.Name}
 		}
 	}
@@ -134,9 +158,18 @@ func (r *Registry) InterceptsHost(host string) bool {
 func normalizeHost(host string) string {
 	host = strings.TrimSpace(strings.ToLower(host))
 	if parsed, _, err := net.SplitHostPort(host); err == nil {
-		return strings.Trim(parsed, "[]")
+		host = parsed
 	}
-	return strings.Trim(host, "[]")
+	host = strings.Trim(host, "[]")
+	// Strip the FQDN root dot: "api.anthropic.com." and "api.anthropic.com"
+	// resolve to the same origin, so leaving it on let the trailing-dot form
+	// slip past both InterceptsHost (the relay loop guard) and the routing
+	// allowlist, which would hand the tunnel to the vendor unfiltered.
+	// A bare "." is the root and never a target host, so it is left alone.
+	if len(host) > 1 {
+		host = strings.TrimSuffix(host, ".")
+	}
+	return host
 }
 
 // DefaultTargets are protocol definitions, not client definitions. Any CLI,
@@ -171,6 +204,24 @@ func DefaultTargets() []Target {
 			Routes: []Route{
 				{Method: http.MethodPost, Prefix: "/v1beta/models/", Suffix: ":generateContent", Action: ActionRelay},
 				{Method: http.MethodPost, Prefix: "/v1beta/models/", Suffix: ":streamGenerateContent", Action: ActionRelay},
+				// Embeddings are a model API the gateway serves (its Gemini
+				// adaptor emits :embedContent / :batchEmbedContents for
+				// embedding models), so leaving them out of this allowlist made
+				// SensitivePrefixes below fail-closed 403 them. That was
+				// invisible while transparent mode was opt-in and became a
+				// regression for every `everyapi use gemini` once it defaulted
+				// on: the injected path has no route filter and relays them
+				// fine. Compare the anthropic target, which relays
+				// /v1/messages/count_tokens alongside /v1/messages for the same
+				// reason.
+				//
+				// :countTokens is deliberately NOT here. The gateway rebuilds
+				// the upstream URL from the model name and never emits that
+				// action, so relaying it would forward a token-count request to
+				// be answered as :generateContent. Fail-closed is the honest
+				// outcome until the gateway can actually serve it.
+				{Method: http.MethodPost, Prefix: "/v1beta/models/", Suffix: ":embedContent", Action: ActionRelay},
+				{Method: http.MethodPost, Prefix: "/v1beta/models/", Suffix: ":batchEmbedContents", Action: ActionRelay},
 			},
 			SensitivePrefixes: []string{"/v1beta/models/"},
 		},

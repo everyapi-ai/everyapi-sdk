@@ -13,10 +13,23 @@ import (
 	"time"
 )
 
+// eventWaitDeadline bounds work that should complete immediately (an in-memory
+// parse, a channel close). It only ever fires on failure, so it is deliberately
+// generous rather than tight.
+//
+// It governs BOTH the receive-side time.After and the context handed to
+// parseSSE, because the context is the binding one: parseSSE selects on
+// ctx.Done(), so a 1s ctx killed the parse before it emitted and the receive
+// then reported "no event received" — raising only the receive deadline moved
+// nothing. On an idle laptop 1s is ample; on a cold CI runner compiling and
+// running all five sdk packages under -race it is not, and the sdk-agent job is
+// the first thing to ever run these under -race at all.
+const eventWaitDeadline = 10 * time.Second
+
 func TestParseSSE_BasicEvent(t *testing.T) {
 	body := "event: channel_status_changed\ndata: {\"channel_id\":7}\n\n"
 	out := make(chan Event, 1)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), eventWaitDeadline)
 	defer cancel()
 
 	go func() {
@@ -35,7 +48,7 @@ func TestParseSSE_BasicEvent(t *testing.T) {
 		if d["channel_id"] != 7 {
 			t.Errorf("data = %+v", d)
 		}
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(eventWaitDeadline):
 		t.Fatal("no event received")
 	}
 }
@@ -43,7 +56,7 @@ func TestParseSSE_BasicEvent(t *testing.T) {
 func TestParseSSE_HeartbeatSuppressed(t *testing.T) {
 	body := "event: heartbeat\ndata: {\"ts\":123}\n\nevent: channel_status_changed\ndata: {\"channel_id\":1}\n\n"
 	out := make(chan Event, 4)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), eventWaitDeadline)
 	defer cancel()
 	done := make(chan struct{})
 	go func() { parseSSE(ctx, strings.NewReader(body), out); close(done) }()
@@ -69,7 +82,7 @@ check:
 func TestParseSSE_HelloSuppressed(t *testing.T) {
 	body := "event: hello\ndata: {\"user_id\":7}\n\nevent: seller_earnings_changed\ndata: {\"delta\":500}\n\n"
 	out := make(chan Event, 4)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), eventWaitDeadline)
 	defer cancel()
 	go func() { _ = parseSSE(ctx, strings.NewReader(body), out) }()
 
@@ -78,7 +91,7 @@ func TestParseSSE_HelloSuppressed(t *testing.T) {
 		if ev.Type != "seller_earnings_changed" {
 			t.Errorf("first surfaced event = %q (hello should be suppressed)", ev.Type)
 		}
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(eventWaitDeadline):
 		t.Fatal("no event received")
 	}
 }
@@ -86,7 +99,7 @@ func TestParseSSE_HelloSuppressed(t *testing.T) {
 func TestParseSSE_CommentIgnored(t *testing.T) {
 	body := ": keepalive\nevent: x\ndata: {}\n\n"
 	out := make(chan Event, 1)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), eventWaitDeadline)
 	defer cancel()
 	go func() { _ = parseSSE(ctx, strings.NewReader(body), out) }()
 
@@ -95,7 +108,7 @@ func TestParseSSE_CommentIgnored(t *testing.T) {
 		if ev.Type != "x" {
 			t.Errorf("type = %q", ev.Type)
 		}
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(eventWaitDeadline):
 		t.Fatal("no event received")
 	}
 }
@@ -157,8 +170,18 @@ func TestSubscribeEvents_ReconnectsOnTransportError(t *testing.T) {
 			t.Fatalf("only received %d/2 events: %v", len(got), got)
 		}
 	}
-	if got[0] != 1 || got[1] != 2 {
-		t.Errorf("conn sequence = %v, want [1 2]", got)
+	// Deliberately not asserting the exact numbers. This handler closes the
+	// connection after every response, which is precisely the condition under
+	// which Go's http.Transport transparently retries an idempotent GET on a
+	// pooled-but-dead connection. That retry increments the server's counter
+	// for a response the client discards, so the first event the client
+	// observes is legitimately not always conn=1 — asserting [1 2] made this
+	// test fail ~2% of the time (always as [2 3]) on a property the test does
+	// not control. What the reconnect loop must guarantee is that the second
+	// event arrives over a LATER connection than the first, i.e. a reconnect
+	// really happened rather than both events coming from one stream.
+	if got[0] >= got[1] {
+		t.Errorf("conn sequence = %v, want two events from strictly increasing connections (proving a reconnect)", got)
 	}
 }
 
@@ -209,7 +232,7 @@ func TestSubscribeEvents_Unauthorized401StopsReconnect(t *testing.T) {
 	})
 
 	// Drain the channel until it closes (SDK terminates on 401).
-	closeDeadline := time.After(1500 * time.Millisecond)
+	closeDeadline := time.After(eventWaitDeadline)
 	closed := false
 	for !closed {
 		select {
@@ -218,7 +241,7 @@ func TestSubscribeEvents_Unauthorized401StopsReconnect(t *testing.T) {
 				closed = true
 			}
 		case <-closeDeadline:
-			t.Fatal("SDK did not terminate within 1.5s of receiving 401")
+			t.Fatal("SDK did not terminate after receiving 401")
 		}
 	}
 

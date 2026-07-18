@@ -74,7 +74,12 @@ func ResolveRelayKey(ctx context.Context, creds *config.Credentials, group strin
 		return creds.RelayKey, nil
 	}
 
-	client := New(creds.APIBase, creds.AccessToken).WithUserID(creds.UserID)
+	// Region-aware: relay-key lookup is a command dial path, so it honors
+	// settings.gateway_region (via ForCredentials) rather than the raw login
+	// base. Otherwise `use --group` / `status` for a user who switched region
+	// without re-login would hit the unreachable login gateway here — before
+	// the region-resolved probe/relay calls downstream ever run.
+	client := ForCredentials(creds)
 	tokens, err := client.ListTokens(ctx)
 	if err != nil {
 		return "", fmt.Errorf("look up relay API key: %w", err)
@@ -164,7 +169,7 @@ func refreshRelayKeyIfNeeded(ctx context.Context, creds *config.Credentials) (st
 	if time.Until(time.Unix(creds.RelayKeyExpiresAt, 0)) > relayKeyRefreshSkew {
 		return "", false, nil
 	}
-	tok, err := New(creds.APIBase, "").OAuth2Refresh(ctx, creds.OAuthClientID, creds.RefreshToken)
+	tok, err := New(config.ResolveAPIBaseForBase(creds.APIBase), "").OAuth2Refresh(ctx, creds.OAuthClientID, creds.RefreshToken)
 	if err != nil {
 		return "", false, nil
 	}

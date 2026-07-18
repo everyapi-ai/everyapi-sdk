@@ -37,10 +37,29 @@ func ResolveAPIBase(override string) string {
 	if base := strings.TrimRight(strings.TrimSpace(override), "/"); base != "" {
 		return base
 	}
+	loginBase := ""
+	if c, err := Load(); err == nil {
+		loginBase = c.APIBase
+	}
+	return ResolveAPIBaseForBase(loginBase)
+}
 
+// ResolveAPIBaseForBase is the base-parameterized core of ResolveAPIBase: given
+// an account's login base (typically creds.APIBase), it applies
+// settings.gateway_region on top. A non-official (self-hosted) login base is
+// returned as-is; an official base yields to the region preference; an empty
+// base falls back to the region preference, then the public default.
+//
+// Prefer this over ResolveAPIBase("") whenever the credentials in hand may
+// differ from what is on disk — injected creds, tests, or a client built from a
+// *Credentials that was not the one config.Load() returned — so the dial base
+// tracks the passed credentials rather than silently re-reading the file. The
+// gateway_region preference is still read from disk; only the login base is
+// taken from the argument.
+func ResolveAPIBaseForBase(loginBase string) string {
 	var credsBase string
-	if c, err := Load(); err == nil && c.APIBase != "" {
-		credsBase = normalizeAPIBase(c.APIBase)
+	if strings.TrimSpace(loginBase) != "" {
+		credsBase = normalizeAPIBase(loginBase)
 		if !isOfficialAPIBase(credsBase) {
 			return credsBase
 		}

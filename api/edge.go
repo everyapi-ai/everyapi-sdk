@@ -1,6 +1,6 @@
 // Edge-node management surfaces — the seller-side endpoints under
 // /api/seller/edge/nodes that the CLI's `everyapi edge ...` command
-// group consumes. Shapes mirror backend/internal/controller/edge_node.go's
+// group consumes. Shapes mirror backend/internal/transport/http/edge/node.go's
 // edgeNodeView + edgeNodeCreateResponse but only decode what we render,
 // so a future backend field addition doesn't break this client.
 package api
@@ -17,7 +17,7 @@ import (
 // strings, so renaming on the backend would break tooling.
 //
 // GPUUtilPct / VRAMUsedGB / ActiveRequests are live-telemetry pointers:
-// the backend (backend/internal/controller/edge_node.go::viewEdgeNode)
+// the backend (backend/internal/transport/http/edge/node.go::viewEdgeNode)
 // omits them when the node is offline or hasn't reported a heartbeat
 // yet — the dashboard treats nil as "no live data" rather than
 // surfacing 0 (a 0% util reading from an idle node IS meaningful,
@@ -234,7 +234,7 @@ const (
 // SetEdgeNodeStatus wraps PATCH /api/seller/edge/nodes/:id/status.
 // `action` MUST be one of EdgeNodeActionEnable / EdgeNodeActionDisable.
 // Body shape and accepted values are dictated by backend
-// controller.SetEdgeNodeStatus (edgeNodeStatusRequest{Action}); the
+// edgehttp.SetEdgeNodeStatus (edgeNodeStatusRequest{Action}); the
 // SDK is the consumer, not the source of truth.
 func (c *Client) SetEdgeNodeStatus(ctx context.Context, id int, action EdgeNodeAction) error {
 	var env struct {

@@ -264,7 +264,7 @@ func TestEdgeNodeTelemetryPartialReport(t *testing.T) {
 }
 
 // TestEdgeNodeTelemetryZeroValuesOnIdleNode is the missing-vs-zero
-// contract test the SDK doc and EDGE_NODE.md rest on. The backend
+// contract test the SDK doc and specs/edge-node.md rest on. The backend
 // viewEdgeNode assigns the three live pointers inside its
 // `ReceivedAt > 0` branch unconditionally, so an idle but
 // online+heartbeating node emits e.g. `gpu_util_pct: 0` — the JSON
@@ -470,7 +470,7 @@ func TestDeleteEdgeNode(t *testing.T) {
 func TestUpdateEdgeNode(t *testing.T) {
 	// Decode against the BACKEND-side wire format (the controller's
 	// edgeNodeUpdateRequest{Name, Location} in
-	// backend/internal/controller/edge_node.go) — decoding into the
+	// backend/internal/transport/http/edge/node.go) — decoding into the
 	// SDK's own EdgeNodeUpdate would round-trip cleanly even if a
 	// future SDK rename desynchronised the JSON tags, masking the
 	// drift this test is meant to catch.

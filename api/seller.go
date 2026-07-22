@@ -90,7 +90,7 @@ func (c *Client) TransferSellerQuota(ctx context.Context, quota int) error {
 	return nil
 }
 
-// SellerEligibility mirrors backend controller.SellerEligibilityResponse —
+// SellerEligibility mirrors backend channeladmin.SellerEligibilityResponse —
 // the subset the CLI surfaces in `everyapi seller setup` to tell the user
 // up-front which mount gate they're failing (account age, email
 // verification, consume log, channel cap). The backend re-checks every
@@ -127,7 +127,7 @@ func (c *Client) GetSellerEligibility(ctx context.Context) (*SellerEligibility, 
 	return &env.Data, nil
 }
 
-// SellerChannelCreate matches backend controller.SellerChannelCreate.
+// SellerChannelCreate matches backend channeladmin.SellerChannelCreate.
 // Whitelisted fields only — the backend strips anything else (group,
 // owner_user_id, priority/weight, base_url) per PRODUCT §4.1 / §4.4a.
 // Name / KindSlug / Keys / Models are the practical minimum. KindSlug

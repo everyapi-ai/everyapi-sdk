@@ -1,6 +1,6 @@
 // Seller-side OAuth onboarding (CLI side of /api/seller/codex/device/*).
 // The flow is RFC 8628-shaped, adapted for OpenAI's custom device
-// endpoints — see backend service/codex_device_oauth.go for the wire
+// endpoints — see backend modules/provideroauth/codex_device.go for the wire
 // quirks. CLI's job is the polling loop + browser launch; the auth
 // state (device_auth_id, user_code, channel name + models) lives in
 // a backend session keyed by a cookie, which is why the client MUST

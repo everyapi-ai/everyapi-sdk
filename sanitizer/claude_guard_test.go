@@ -102,7 +102,8 @@ func TestServerClaudeGuardDropsPollutedTextButKeepsStructuredToolUse(t *testing.
 }
 
 func TestServerClaudeGuardDetectsPollutionSplitAcrossTextDeltas(t *testing.T) {
-	stream := sseTextEvent(0, "court ") + sseTextEvent(0, "court ") + sseTextEvent(0, "court") +
+	stream := sseTextEvent(0, "court ") + sseTextEvent(0, "court ") + sseTextEvent(0, "court ") +
+		sseTextEvent(0, "court ") + sseTextEvent(0, "court") +
 		claudeToolUseBlockEvent(1) + claudeMessageDeltaEvent("tool_use") + claudeMessageStopEvent()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -117,16 +118,133 @@ func TestServerClaudeGuardDetectsPollutionSplitAcrossTextDeltas(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	if bytes.Contains(body, []byte("court")) || !bytes.Contains(body, []byte(`"type":"tool_use"`)) {
+	// The first standalone instance of a token can never be recognized as a
+	// flood (nothing to repeat against yet), so at most one may stream out.
+	if bytes.Count(body, []byte("court")) > 1 || !bytes.Contains(body, []byte(`"type":"tool_use"`)) {
 		t.Fatalf("split pollution was not filtered safely: %s", body)
 	}
 }
 
+// Mirrors the 2026-07-22 incident shape verbatim: the flood word 课 standing
+// alone line after line at a tool_use boundary. Kept alongside the novel-token
+// case as a regression pin on the real captured incident.
+func TestServerClaudeGuardDetectsSimplifiedCJKFlood(t *testing.T) {
+	stream := sseTextEvent(0, "查那个文件。\n\n") + sseTextEvent(0, "课\n\n") + sseTextEvent(0, "课\n\n") + sseTextEvent(0, "课") +
+		claudeToolUseBlockEvent(1) + claudeMessageDeltaEvent("tool_use") + claudeMessageStopEvent()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, stream)
+	}))
+	defer upstream.Close()
+	base, _, stop := startServerCfg(t, Config{UpstreamBase: upstream.URL, Detectors: []Detector{}, GuardClaudeToolCorruption: true})
+	defer stop()
+	resp, err := http.Post(base+"/v1/messages", "application/json", strings.NewReader(`{"stream":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if bytes.Count(body, []byte("课")) > 1 || !bytes.Contains(body, []byte(`"type":"tool_use"`)) {
+		t.Fatalf("simplified CJK flood was not filtered safely: %s", body)
+	}
+}
+
+// The flood token mutates faster than any word list can track. This case uses
+// 程 — deliberately absent from every control-word list — to pin the guard to
+// the token-agnostic shape signal (RepeatedStandaloneLine) instead.
+func TestServerClaudeGuardDetectsNovelTokenFlood(t *testing.T) {
+	stream := sseTextEvent(0, "程\n\n") + sseTextEvent(0, "程\n\n") + sseTextEvent(0, "程") +
+		claudeToolUseBlockEvent(1) + claudeMessageDeltaEvent("tool_use") + claudeMessageStopEvent()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, stream)
+	}))
+	defer upstream.Close()
+	base, _, stop := startServerCfg(t, Config{UpstreamBase: upstream.URL, Detectors: []Detector{}, GuardClaudeToolCorruption: true})
+	defer stop()
+	resp, err := http.Post(base+"/v1/messages", "application/json", strings.NewReader(`{"stream":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	// A never-seen token cannot be recognized on its FIRST standalone line —
+	// there is nothing to match it against yet — so exactly one instance may
+	// stream through. From the second line the shape signal holds, and the
+	// third confirms and drops. The incident this guards against shipped 26.
+	if bytes.Count(body, []byte("程")) > 1 || !bytes.Contains(body, []byte(`"type":"tool_use"`)) {
+		t.Fatalf("novel-token flood was not filtered safely: %s", body)
+	}
+}
+
+// Leaked tool-call wire markup is a fixed protocol frame (not a mutating
+// flood token) and must trip the captured-stream check regardless of stop
+// reason.
+func TestClaudeGuardDetectsLeakedInvokeMarkup(t *testing.T) {
+	stream := sseTextEvent(0, "count\n<invoke name=\"Bash\"><parameter name=\"command\">pwd</parameter></invoke>") +
+		claudeMessageDeltaEvent("end_turn") + claudeMessageStopEvent()
+
+	if !anthropicSSEHasToolCallCorruption([]byte(stream)) {
+		t.Fatal("known leaked invoke markup was not detected")
+	}
+}
+
+// A legitimate label/value checklist repeats a value word on 3+ standalone
+// lines but interleaved with labels — the tail-dominance gate must let it
+// stream through untouched.
+func TestServerClaudeGuardAllowsRepeatedChecklistValues(t *testing.T) {
+	stream := sseTextEvent(0, "auth-service\nPassed\nbilling\nPassed\nweb\nPassed\n") +
+		sseTextEvent(0, "All three services are healthy, proceeding.\n") +
+		claudeToolUseBlockEvent(1) + claudeMessageDeltaEvent("tool_use") + claudeMessageStopEvent()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, stream)
+	}))
+	defer upstream.Close()
+	base, _, stop := startServerCfg(t, Config{UpstreamBase: upstream.URL, Detectors: []Detector{}, GuardClaudeToolCorruption: true})
+	defer stop()
+	resp, err := http.Post(base+"/v1/messages", "application/json", strings.NewReader(`{"stream":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if bytes.Count(body, []byte("Passed")) != 3 || !bytes.Contains(body, []byte("proceeding")) {
+		t.Fatalf("legitimate checklist was mangled by the guard: %s", body)
+	}
+}
+
+func TestRepeatedStandaloneLine(t *testing.T) {
+	cases := []struct {
+		name      string
+		text      string
+		minRepeat int
+		want      bool
+	}{
+		{"novel CJK flood", "正文结束。\n\n程\n\n程\n\n程", 3, true},
+		{"latin flood", "done.\n\nflood\n\nflood\n\nflood", 3, true},
+		{"interleaved two tokens", "课\n\ncourse\n\n课\n\ncourse\n\n课", 3, true},
+		{"below threshold", "text\n\n课\n\n课", 3, false},
+		{"threshold two", "text\n\n课\n\n课", 2, true},
+		{"list items repeat legitimately", "- done\n- done\n- done", 3, false},
+		{"horizontal rules", "---\n\n---\n\n---", 3, false},
+		{"distinct lines", "alpha\n\nbeta\n\ngamma", 3, false},
+		{"long lines are prose", strings.Repeat(strings.Repeat("x", 40)+"\n", 3), 3, false},
+	}
+	for _, tc := range cases {
+		if got := RepeatedStandaloneLine(tc.text, tc.minRepeat); got != tc.want {
+			t.Errorf("%s: RepeatedStandaloneLine(%q, %d) = %v, want %v",
+				tc.name, tc.text, tc.minRepeat, got, tc.want)
+		}
+	}
+}
+
 func TestServerClaudeGuardDetectsSplitPollutionAcrossPing(t *testing.T) {
-	stream := sseTextEvent(0, "court ") + "event: ping\ndata: {\"type\":\"ping\"}\n\n" + sseTextEvent(0, "court ") + sseTextEvent(0, "court") +
+	stream := sseTextEvent(0, "court ") + "event: ping\ndata: {\"type\":\"ping\"}\n\n" + sseTextEvent(0, "court ") +
+		sseTextEvent(0, "court ") + sseTextEvent(0, "court ") + sseTextEvent(0, "court") +
 		claudeMessageDeltaEvent("tool_use") + claudeMessageStopEvent()
 	body := guardedClaudeResponse(t, stream)
-	if bytes.Contains(body, []byte("court")) {
+	if bytes.Count(body, []byte("court")) > 1 {
 		t.Fatalf("ping-separated pollution leaked: %s", body)
 	}
 }
@@ -233,15 +351,6 @@ func TestClaudeGuardDetectsRepeatedLeakedControlTokens(t *testing.T) {
 
 	if !anthropicSSEHasToolCallCorruption([]byte(stream)) {
 		t.Fatal("known repeated course/tool_use corruption was not detected")
-	}
-}
-
-func TestClaudeGuardDetectsLeakedInvokeMarkup(t *testing.T) {
-	stream := sseTextEvent(0, "count\n<invoke name=\"Bash\"><parameter name=\"command\">pwd</parameter></invoke>") +
-		claudeMessageDeltaEvent("end_turn") + claudeMessageStopEvent()
-
-	if !anthropicSSEHasToolCallCorruption([]byte(stream)) {
-		t.Fatal("known leaked invoke markup was not detected")
 	}
 }
 

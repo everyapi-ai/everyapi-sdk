@@ -7,6 +7,8 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 var claudeGuardInlineCode = regexp.MustCompile("`[^`\\n]*`")
@@ -88,14 +90,45 @@ func (s *claudeGuardStream) consume(event []byte) {
 		return
 	}
 	s.blockText.WriteString(text)
-	if claudeTextHasStrongPollution(s.blockText.String()) {
+	full := stripClaudeGuardMarkdownCode(s.blockText.String())
+	// Line signals must not see the unterminated last line: a delta boundary
+	// falling right after a word at the start of a prose line would otherwise
+	// fabricate a standalone repeat and drop a clean block. Runs tokenize on
+	// whitespace, so they read the full text (a partial word can only delay a
+	// run match, never invent one). The final full-text check happens at
+	// content_block_stop, before the held flush.
+	lineView := full
+	if !strings.HasSuffix(full, "\n") {
+		if i := strings.LastIndexByte(full, '\n'); i >= 0 {
+			lineView = full[:i+1]
+		} else {
+			lineView = ""
+		}
+	}
+	if repeatedStandaloneLineDominatesTail(lineView, 3) || LongestTokenRun(full) >= 5 ||
+		LeakedToolMarkup(full) ||
+		strings.Contains(full, "The model's tool call could not be parsed (retry also failed).") {
 		s.held = nil
 		s.polluted = true
 		return
 	}
-	if claudeTextHasPollutionCandidate(text) || len(s.held) > 0 {
+	// Hold (delay, never drop) while the flood shape MIGHT be forming — a
+	// second standalone repeat, or a run still in progress at the tail. The
+	// trailing-run form (not the longest run anywhere) is what lets ordinary
+	// doubled words pass: "that that is true" has a trailing run of 1 once
+	// the sentence continues, so a hold started on the doubled word is
+	// released on the next delta instead of freezing the block. flushHeld
+	// re-checks the full text before releasing, so lifting a hold can never
+	// leak a confirmed flood.
+	if RepeatedStandaloneLine(lineView, 2) || trailingTokenRun(full) >= 2 {
 		s.hold(event)
 		return
+	}
+	if len(s.held) > 0 {
+		s.flushHeld()
+		if s.polluted {
+			return
+		}
 	}
 	s.pending = append(s.pending, event...)
 }
@@ -110,7 +143,19 @@ func (s *claudeGuardStream) hold(event []byte) {
 	s.held = append(s.held, event...)
 }
 
+// flushHeld releases the held events — but first re-checks the block's FULL
+// text. The per-delta strong pass excludes the unterminated last line, and
+// many streams end a block without an explicit content_block_stop (the next
+// content_block_start, a message_delta, or EOF closes it instead), so this
+// release point is the last place a flood ending at the block boundary can
+// still be confirmed and dropped.
 func (s *claudeGuardStream) flushHeld() {
+	if len(s.held) > 0 && !s.polluted &&
+		claudeTextHasStrongPollution(stripClaudeGuardMarkdownCode(s.blockText.String())) {
+		s.polluted = true
+		s.held = nil
+		return
+	}
 	s.pending = append(s.pending, s.held...)
 	s.held = nil
 }
@@ -156,44 +201,193 @@ func claudeSSEEventText(raw []byte) (eventType, text string, isText bool) {
 		event.Type == "content_block_delta" && event.Delta.Type == "text_delta"
 }
 
-func claudeTextHasPollutionCandidate(text string) bool {
-	lower := strings.ToLower(text)
-	for _, marker := range []string{"course", "court", "課", "invoke name", "parameter name", "antml:"} {
-		if strings.Contains(lower, marker) {
+// The degeneration flood token mutates faster than any control-word list can
+// track (course/court/課/课/... were all observed in the wild before this
+// package stopped chasing them). Detection is therefore SHAPE-based: the two
+// invariants across every observed variant are
+//
+//   - one identical short single-token line standing alone, over and over
+//     (RepeatedStandaloneLine / RepeatedStandaloneLineTokens), which also
+//     catches interleaved floods where two tokens alternate, and
+//   - one short token repeated back-to-back inside a line ("course course
+//     course …"), which LongestTokenRun measures (newlines are whitespace to
+//     strings.Fields, so a pure line flood counts here too).
+//
+// Callers strip fenced code first (stripClaudeGuardMarkdownCode / the CLI's
+// stripClaudeMarkdownCode) so code listings with repeated short lines ("end",
+// "fi", ...) never feed the counters.
+
+// claudeFloodToken reports whether s can be a flood token: word-sized and
+// letter-bearing, so rules like "---" or long prose lines never count. The
+// cap is in runes, not bytes — a byte cap would admit 32 Latin letters but
+// only 10 CJK characters, exempting longer CJK flood phrases from detection.
+// Every corpus flood token fits well under 16 runes ("parameter" is 9).
+func claudeFloodToken(s string) bool {
+	return s != "" && utf8.RuneCountInString(s) <= 16 && strings.ContainsFunc(s, unicode.IsLetter)
+}
+
+// StandaloneLineTokens returns each flood-shaped token that stands alone on a
+// line, with the number of lines it occupies. Empty on clean prose. Callers
+// derive their signal from the map: in-block repetition here (see
+// RepeatedStandaloneLine), or accumulation across adjacent assistant turns in
+// the CLI's recovery clusterer, so a flood smeared thinly over several turns
+// still crosses a threshold.
+func StandaloneLineTokens(text string) map[string]int {
+	counts := map[string]int{}
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		// Single token only: interior whitespace (any Unicode space, so an
+		// ideographic space also splits) means prose or list items, which
+		// repeat legitimately ("- done"). Keys are lowercased to match
+		// LongestTokenRun — a case-varying flood must not split across keys.
+		if strings.ContainsFunc(line, unicode.IsSpace) || !claudeFloodToken(line) {
+			continue
+		}
+		counts[strings.ToLower(line)]++
+	}
+	return counts
+}
+
+// RepeatedStandaloneLine reports whether any single short token stands alone
+// on at least minRepeat lines (not necessarily adjacent).
+func RepeatedStandaloneLine(text string, minRepeat int) bool {
+	for _, n := range StandaloneLineTokens(text) {
+		if n >= minRepeat {
 			return true
 		}
 	}
 	return false
 }
 
-func claudeTextHasStrongPollution(text string) bool {
-	visible := stripClaudeGuardMarkdownCode(text)
-	if invoke := strings.Index(visible, `invoke name="`); invoke >= 0 &&
-		strings.Contains(visible[invoke:], `parameter name=`) {
-		return true
+// trailingTokenRun returns the length of the back-to-back run of one
+// flood-shaped token at the very END of text — i.e. a repetition that is
+// still in progress. A doubled word in the middle of prose ("that that is
+// true") has a trailing run of 1 and is not suspicious; a stream currently
+// emitting "court court" is.
+func trailingTokenRun(text string) int {
+	words := strings.Fields(strings.ToLower(text))
+	run := 0
+	last := ""
+	for i := len(words) - 1; i >= 0; i-- {
+		word := strings.Trim(words[i], `.,:;!?"'()[]{}<>。，`)
+		if !claudeFloodToken(word) {
+			break
+		}
+		if last == "" {
+			last = word
+			run = 1
+			continue
+		}
+		if word != last {
+			break
+		}
+		run++
 	}
-	if strings.Contains(visible, "The model's tool call could not be parsed (retry also failed).") {
-		return true
-	}
+	return run
+}
+
+// LongestTokenRun returns the longest back-to-back run of one flood-shaped
+// token under whitespace tokenization, trailing punctuation ignored
+// ("course." continues a "course" run).
+func LongestTokenRun(text string) int {
+	longest, run := 0, 0
 	previous := ""
-	repeated := 0
-	for _, word := range strings.Fields(strings.ToLower(visible)) {
-		word = strings.Trim(word, `.,:;!?"'()[]{}<>`)
-		switch word {
-		case "course", "court", "課":
-			if word == previous {
-				repeated++
-			} else {
-				previous, repeated = word, 1
+	for _, word := range strings.Fields(strings.ToLower(text)) {
+		word = strings.Trim(word, `.,:;!?"'()[]{}<>。，`)
+		if !claudeFloodToken(word) {
+			previous, run = "", 0
+			continue
+		}
+		if word == previous {
+			run++
+		} else {
+			previous, run = word, 1
+		}
+		if run > longest {
+			longest = run
+		}
+	}
+	return longest
+}
+
+// repeatedStandaloneLineDominatesTail reports whether some token stands alone
+// on >= minRepeat lines AND lines of REPEATING tokens (standalone count >= 2,
+// any of them — an interleaved two-token flood counts in full) make up more
+// than 2/3 of the non-blank lines from that token's first appearance to the
+// end of text. Real floods trail the prose and repeat their few tokens over
+// and over; a legitimate label/value checklist ("auth-service\nPassed\n
+// billing\nPassed\nweb\nPassed") repeats only the value while every label is
+// one-off, so its repeating-line share stays at or below the bar. One-off
+// lone lines dilute rather than reinforce.
+func repeatedStandaloneLineDominatesTail(text string, minRepeat int) bool {
+	lines := strings.Split(text, "\n")
+	tokens := make([]string, len(lines))
+	blank := make([]bool, len(lines))
+	counts := map[string]int{}
+	firstAt := map[string]int{}
+	for i, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			blank[i] = true
+			continue
+		}
+		if !strings.ContainsFunc(line, unicode.IsSpace) && claudeFloodToken(line) {
+			token := strings.ToLower(line)
+			tokens[i] = token
+			counts[token]++
+			if _, seen := firstAt[token]; !seen {
+				firstAt[token] = i
 			}
-			if repeated >= 3 {
-				return true
+		}
+	}
+	for token, n := range counts {
+		if n < minRepeat {
+			continue
+		}
+		repeatingLines, nonBlank := 0, 0
+		for i := firstAt[token]; i < len(lines); i++ {
+			if blank[i] {
+				continue
 			}
-		default:
-			previous, repeated = "", 0
+			nonBlank++
+			if tokens[i] != "" && counts[tokens[i]] >= 2 {
+				repeatingLines++
+			}
+		}
+		if nonBlank > 0 && repeatingLines*3 > nonBlank*2 {
+			return true
 		}
 	}
 	return false
+}
+
+// LeakedToolMarkup reports whether text carries the model's tool-call wire
+// markup leaked into visible prose — `invoke name="` followed by
+// `parameter name=`. Unlike the retired flood word lists this is a fixed
+// protocol frame, not a mutating token: the markup IS the tool-call syntax,
+// so matching it is structural detection, not content chasing. The leading
+// `<` is deliberately not required: in-the-wild variants mangle the opening
+// bracket (e.g. a leaked `antml:invoke name="…` prefix) while the parameter
+// markup survives.
+func LeakedToolMarkup(text string) bool {
+	invoke := strings.Index(text, `invoke name="`)
+	return invoke >= 0 && strings.Contains(text[invoke:], `parameter name=`)
+}
+
+// claudeTextHasStrongPollution takes text already stripped of fenced code.
+func claudeTextHasStrongPollution(visible string) bool {
+	if repeatedStandaloneLineDominatesTail(visible, 3) {
+		return true
+	}
+	// 5, not 3: with no word list narrowing the match, legitimate emphasis
+	// ("no no no") must stay clear. Every corpus incident repeats >= 8.
+	if LongestTokenRun(visible) >= 5 {
+		return true
+	}
+	if LeakedToolMarkup(visible) {
+		return true
+	}
+	return strings.Contains(visible, "The model's tool call could not be parsed (retry also failed).")
 }
 
 // anthropicSSEHasToolCallCorruption recognizes the stable Opus 4.8 failure in
@@ -245,11 +439,7 @@ func anthropicSSEHasToolCallCorruption(stream []byte) bool {
 	}
 
 	visible := stripClaudeGuardMarkdownCode(text.String())
-	// Match `invoke name="` without requiring the leading `<`: in-the-wild
-	// variants of the corruption mangle the opening bracket (e.g. a leaked
-	// `antml:invoke name="...` prefix) while the parameter markup survives.
-	if invoke := strings.Index(visible, `invoke name="`); invoke >= 0 &&
-		strings.Contains(visible[invoke:], `parameter name=`) {
+	if LeakedToolMarkup(visible) {
 		return true
 	}
 	if strings.Contains(visible, "The model's tool call could not be parsed (retry also failed).") {
@@ -262,21 +452,27 @@ func anthropicSSEHasToolCallCorruption(stream []byte) bool {
 		return true
 	}
 
-	standalone := 0
-	for _, line := range strings.Split(visible, "\n") {
-		switch strings.ToLower(strings.TrimSpace(line)) {
-		case "call", "course", "court", "count", "invoke", "parameter", "課":
-			standalone++
-		}
-	}
-	// The lexical fallback only applies when the corruption's defining
+	// The shape fallback only applies when the corruption's defining
 	// symptom is present: a tool-ish stop with NO structured tool_use
 	// block. A response that carries a real tool_use block is functional
-	// for Claude Code even if its narration happens to contain standalone
-	// control words, and rejecting it would hard-fail a valid turn (and
-	// bill its output tokens again on retry).
-	return (stopReason == "tool_use" || stopReason == "stop_sequence") &&
-		!structuredToolUse && standalone >= 2
+	// for Claude Code even if its narration happens to repeat a word, and
+	// rejecting it would hard-fail a valid turn (and bill its output
+	// tokens again on retry). stop_sequence without a tool block is a
+	// perfectly valid completion whenever the caller supplies
+	// stop_sequences, so that path keeps the full strong thresholds; only
+	// tool_use-without-a-block (invalid on the wire by itself) may use the
+	// lower ones.
+	if structuredToolUse {
+		return false
+	}
+	switch stopReason {
+	case "tool_use":
+		return RepeatedStandaloneLine(visible, 2) || LongestTokenRun(visible) >= 3
+	case "stop_sequence":
+		return repeatedStandaloneLineDominatesTail(visible, 3) || LongestTokenRun(visible) >= 5
+	default:
+		return false
+	}
 }
 
 func sseEventData(raw []byte) ([]byte, bool) {

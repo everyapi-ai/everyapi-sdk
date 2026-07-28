@@ -37,25 +37,34 @@ type TokenSummary struct {
 	Group string `json:"group"`
 }
 
-// ListTokens returns the user's relay API tokens (management API,
-// UserAuth — caller must have set WithUserID). Only the first page is
-// read: a user picking a relay key for the CLI realistically has a
-// handful of tokens, and full pagination would be overkill here.
+// ListTokens returns all of the user's relay API tokens (management API,
+// UserAuth — caller must have set WithUserID). It follows pagination because
+// disabled historical tokens can fill earlier pages while an older enabled
+// key remains selectable on a later page.
 func (c *Client) ListTokens(ctx context.Context) ([]TokenSummary, error) {
-	var env struct {
-		Success bool   `json:"success"`
-		Message string `json:"message"`
-		Data    struct {
-			Items []TokenSummary `json:"items"`
-		} `json:"data"`
+	const pageSize = 100
+	var tokens []TokenSummary
+	for page := 1; ; page++ {
+		var env struct {
+			Success bool   `json:"success"`
+			Message string `json:"message"`
+			Data    struct {
+				Total int            `json:"total"`
+				Items []TokenSummary `json:"items"`
+			} `json:"data"`
+		}
+		path := fmt.Sprintf("/api/token/?p=%d&page_size=%d", page, pageSize)
+		if err := c.do(ctx, "GET", path, nil, &env); err != nil {
+			return nil, err
+		}
+		if !env.Success {
+			return nil, errors.New(env.Message)
+		}
+		tokens = append(tokens, env.Data.Items...)
+		if (env.Data.Total > 0 && len(tokens) >= env.Data.Total) || len(env.Data.Items) < pageSize {
+			return tokens, nil
+		}
 	}
-	if err := c.do(ctx, "GET", "/api/token/", nil, &env); err != nil {
-		return nil, err
-	}
-	if !env.Success {
-		return nil, errors.New(env.Message)
-	}
-	return env.Data.Items, nil
 }
 
 // Token is the full token record returned by GetToken / UpdateToken.

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -57,6 +58,44 @@ func TestListTokens(t *testing.T) {
 			t.Errorf("error %q does not include server message", err)
 		}
 	})
+}
+
+func TestListTokensReadsEveryPage(t *testing.T) {
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if got := r.URL.Query().Get("page_size"); got != "100" {
+			t.Fatalf("page_size = %q, want 100", got)
+		}
+		page := r.URL.Query().Get("p")
+		items := make([]TokenSummary, 0, 100)
+		switch page {
+		case "1":
+			for id := 101; id >= 2; id-- {
+				items = append(items, TokenSummary{ID: id, Name: fmt.Sprintf("key-%d", id), Status: TokenStatusDisabled})
+			}
+		case "2":
+			items = append(items, TokenSummary{ID: 1, Name: "old-enabled", Status: TokenStatusEnabled})
+		default:
+			t.Fatalf("unexpected page %q", page)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"data":    map[string]any{"total": 101, "items": items},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}))
+	defer srv.Close()
+
+	toks, err := New(srv.URL, "acc").WithUserID(7).ListTokens(context.Background())
+	if err != nil {
+		t.Fatalf("ListTokens: %v", err)
+	}
+	if requests != 2 || len(toks) != 101 || toks[100].ID != 1 {
+		t.Fatalf("requests=%d len=%d last=%+v", requests, len(toks), toks[len(toks)-1])
+	}
 }
 
 func TestTokenKey(t *testing.T) {

@@ -141,6 +141,90 @@ func TestSelectRelayKeyFetchesAndPersistsChosenToken(t *testing.T) {
 	}
 }
 
+func TestSelectAutoRelayKeyReusesExistingKey(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	var creates atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/token/":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"data": map[string]interface{}{"items": []map[string]interface{}{
+					{"id": 31, "name": "Auto", "status": TokenStatusEnabled, "group": "auto"},
+				}},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/token/":
+			creates.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+		case r.URL.Path == "/api/token/31/key":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "data": map[string]interface{}{"key": "sk-everyapi-auto-31"},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	creds := &config.Credentials{APIBase: srv.URL, AccessToken: "tok", UserID: 1}
+
+	created, err := SelectAutoRelayKey(context.Background(), creds)
+	if err != nil {
+		t.Fatalf("SelectAutoRelayKey: %v", err)
+	}
+	if created || creates.Load() != 0 {
+		t.Fatalf("existing auto key should be reused: created=%v posts=%d", created, creates.Load())
+	}
+	if creds.RelayKeyTokenID != 31 || creds.RelayKey != "sk-everyapi-auto-31" {
+		t.Fatalf("auto key not selected: %+v", creds)
+	}
+}
+
+func TestSelectAutoRelayKeyCreatesMissingKey(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	var created atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/token/":
+			items := []map[string]interface{}{{"id": 9, "name": "Basic", "status": TokenStatusEnabled, "group": "basic"}}
+			if created.Load() {
+				items = append([]map[string]interface{}{{"id": 32, "name": "Auto", "status": TokenStatusEnabled, "group": "auto"}}, items...)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "data": map[string]interface{}{"items": items},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/token/":
+			var req TokenCreate
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Errorf("decode create request: %v", err)
+			}
+			if req.Name != "Auto" || req.Group != "auto" || !req.UnlimitedQuota || req.ExpiredTime != TokenExpiresNever || !req.CrossGroupRetry {
+				t.Errorf("auto create request = %+v", req)
+			}
+			created.Store(true)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+		case r.URL.Path == "/api/token/32/key":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "data": map[string]interface{}{"key": "sk-everyapi-auto-32"},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	creds := &config.Credentials{APIBase: srv.URL, AccessToken: "tok", UserID: 1}
+
+	wasCreated, err := SelectAutoRelayKey(context.Background(), creds)
+	if err != nil {
+		t.Fatalf("SelectAutoRelayKey: %v", err)
+	}
+	if !wasCreated || !created.Load() {
+		t.Fatal("missing auto key was not created")
+	}
+	if creds.RelayKeyTokenID != 32 || creds.RelayKey != "sk-everyapi-auto-32" {
+		t.Fatalf("created auto key not selected: %+v", creds)
+	}
+}
+
 func TestResolveRelayKey_GroupBypass(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	srv := tokenListAndKeyServer(t,

@@ -182,6 +182,44 @@ func SelectRelayKey(ctx context.Context, creds *config.Credentials, tokenID int)
 	return config.Save(creds)
 }
 
+// SelectAutoRelayKey selects an enabled group=auto token, creating the
+// canonical unlimited token when the account does not have one yet. The bool
+// reports whether this call created the token.
+func SelectAutoRelayKey(ctx context.Context, creds *config.Credentials) (bool, error) {
+	if creds == nil {
+		return false, errors.New("not signed in")
+	}
+	client := ForCredentials(creds)
+	tokens, err := client.ListEnabledTokens(ctx)
+	if err != nil {
+		return false, fmt.Errorf("look up auto relay API key: %w", err)
+	}
+	for _, token := range tokens {
+		if token.Group == "auto" {
+			return false, SelectRelayKey(ctx, creds, token.ID)
+		}
+	}
+	if err := client.CreateToken(ctx, TokenCreate{
+		Name:            "Auto",
+		ExpiredTime:     TokenExpiresNever,
+		UnlimitedQuota:  true,
+		Group:           "auto",
+		CrossGroupRetry: true,
+	}); err != nil {
+		return false, fmt.Errorf("create auto relay API key: %w", err)
+	}
+	tokens, err = client.ListEnabledTokens(ctx)
+	if err != nil {
+		return true, fmt.Errorf("look up created auto relay API key: %w", err)
+	}
+	for _, token := range tokens {
+		if token.Group == "auto" {
+			return true, SelectRelayKey(ctx, creds, token.ID)
+		}
+	}
+	return true, errors.New("created auto relay API key was not returned by the server")
+}
+
 // refreshRelayKeyIfNeeded proactively renews an OAuth2-issued relay key that's
 // within relayKeyRefreshSkew of expiry, updating + persisting creds in place.
 // Returns (newKey, true) only on a successful refresh; (—, false) when there's

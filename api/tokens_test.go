@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -95,6 +96,25 @@ func TestListTokensReadsEveryPage(t *testing.T) {
 	}
 	if requests != 2 || len(toks) != 101 || toks[100].ID != 1 {
 		t.Fatalf("requests=%d len=%d last=%+v", requests, len(toks), toks[len(toks)-1])
+	}
+}
+
+func TestListEnabledTokensRequestsEnabledStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("status"); got != strconv.Itoa(TokenStatusEnabled) {
+			t.Fatalf("status = %q, want enabled", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"data":{"total":1,"items":[{"id":4,"name":"enabled","status":1}]}}`))
+	}))
+	defer srv.Close()
+
+	toks, err := New(srv.URL, "acc").WithUserID(7).ListEnabledTokens(context.Background())
+	if err != nil {
+		t.Fatalf("ListEnabledTokens: %v", err)
+	}
+	if len(toks) != 1 || toks[0].ID != 4 {
+		t.Fatalf("tokens = %+v", toks)
 	}
 }
 

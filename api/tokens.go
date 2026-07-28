@@ -42,6 +42,17 @@ type TokenSummary struct {
 // disabled historical tokens can fill earlier pages while an older enabled
 // key remains selectable on a later page.
 func (c *Client) ListTokens(ctx context.Context) ([]TokenSummary, error) {
+	return c.listTokens(ctx, 0)
+}
+
+// ListEnabledTokens returns only relay keys that can currently authenticate.
+// Filtering server-side prevents disabled history from consuming result pages;
+// pagination remains as a compatibility fallback for older gateways.
+func (c *Client) ListEnabledTokens(ctx context.Context) ([]TokenSummary, error) {
+	return c.listTokens(ctx, TokenStatusEnabled)
+}
+
+func (c *Client) listTokens(ctx context.Context, status int) ([]TokenSummary, error) {
 	const pageSize = 100
 	var tokens []TokenSummary
 	for page := 1; ; page++ {
@@ -54,6 +65,9 @@ func (c *Client) ListTokens(ctx context.Context) ([]TokenSummary, error) {
 			} `json:"data"`
 		}
 		path := fmt.Sprintf("/api/token/?p=%d&page_size=%d", page, pageSize)
+		if status != 0 {
+			path += fmt.Sprintf("&status=%d", status)
+		}
 		if err := c.do(ctx, "GET", path, nil, &env); err != nil {
 			return nil, err
 		}

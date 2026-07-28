@@ -80,7 +80,7 @@ func ResolveRelayKey(ctx context.Context, creds *config.Credentials, group strin
 	// without re-login would hit the unreachable login gateway here — before
 	// the region-resolved probe/relay calls downstream ever run.
 	client := ForCredentials(creds)
-	tokens, err := client.ListTokens(ctx)
+	tokens, err := client.ListEnabledTokens(ctx)
 	if err != nil {
 		return "", fmt.Errorf("look up relay API key: %w", err)
 	}

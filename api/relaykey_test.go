@@ -105,10 +105,39 @@ func TestResolveRelayKey_DefaultGroupSaveBack(t *testing.T) {
 	if creds.RelayKey != "sk-everyapi-fresh-1234" {
 		t.Errorf("creds.RelayKey not cached: %q", creds.RelayKey)
 	}
+	if creds.RelayKeyTokenID != 11 {
+		t.Errorf("creds.RelayKeyTokenID = %d, want 11", creds.RelayKeyTokenID)
+	}
 	// Verify the save-back actually hit disk.
 	cfgDir, _ := config.ConfigDir()
 	if _, err := os.Stat(filepath.Join(cfgDir, "credentials.json")); err != nil {
 		t.Errorf("credentials.json not written: %v", err)
+	}
+}
+
+func TestSelectRelayKeyFetchesAndPersistsChosenToken(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	srv := tokenListAndKeyServer(t, nil, map[int]string{22: "sk-everyapi-chosen-22"})
+	creds := &config.Credentials{
+		APIBase:     srv.URL,
+		AccessToken: "tok",
+		UserID:      1,
+		RelayKey:    "sk-everyapi-old",
+	}
+
+	if err := SelectRelayKey(context.Background(), creds, 22); err != nil {
+		t.Fatalf("SelectRelayKey: %v", err)
+	}
+	if creds.RelayKey != "sk-everyapi-chosen-22" || creds.RelayKeyTokenID != 22 {
+		t.Fatalf("selected relay key not cached: %+v", creds)
+	}
+	reloaded, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if reloaded.RelayKey != "sk-everyapi-chosen-22" || reloaded.RelayKeyTokenID != 22 {
+		t.Fatalf("selected relay key not persisted: %+v", reloaded)
 	}
 }
 

@@ -110,6 +110,10 @@ type Credentials struct {
 	// here. Empty in files written before this field existed —
 	// resolved lazily on the next use/status/login.
 	RelayKey string `json:"relay_key,omitempty"`
+	// RelayKeyTokenID identifies the account token cached in RelayKey. It lets
+	// interactive clients restore and mark the current selection without
+	// disclosing every candidate key. Zero means unknown (legacy/OAuth creds).
+	RelayKeyTokenID int `json:"relay_key_token_id,omitempty"`
 	// RefreshToken renews an OAuth2-issued RelayKey before it expires
 	// (device-grant fallback only). Empty for the legacy flow, whose
 	// keys don't expire.

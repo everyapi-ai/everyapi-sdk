@@ -113,6 +113,7 @@ func ResolveRelayKey(ctx context.Context, creds *config.Credentials, group strin
 	}
 
 	creds.RelayKey = key
+	creds.RelayKeyTokenID = pick.ID
 	if saveErr := config.Save(creds); saveErr != nil {
 		return key, &ErrCacheSave{Err: saveErr}
 	}
@@ -153,6 +154,31 @@ func InvalidateCachedRelayKey(creds *config.Credentials) error {
 		return nil
 	}
 	creds.RelayKey = ""
+	creds.RelayKeyTokenID = 0
+	return config.Save(creds)
+}
+
+// SelectRelayKey makes one enabled token the persisted default relay key.
+// Callers are responsible for presenting only enabled tokens; the backend is
+// still authoritative and rejects an unusable key when it is relayed.
+func SelectRelayKey(ctx context.Context, creds *config.Credentials, tokenID int) error {
+	if creds == nil {
+		return errors.New("not signed in")
+	}
+	if tokenID <= 0 {
+		return errors.New("invalid relay API key id")
+	}
+	key, err := ForCredentials(creds).TokenKey(ctx, tokenID)
+	if err != nil {
+		return fmt.Errorf("fetch selected relay API key: %w", err)
+	}
+	creds.RelayKey = key
+	creds.RelayKeyTokenID = tokenID
+	// A manual account-token selection leaves OAuth key rotation mode. Keeping
+	// old refresh material would silently replace the chosen key later.
+	creds.RefreshToken = ""
+	creds.RelayKeyExpiresAt = 0
+	creds.OAuthClientID = ""
 	return config.Save(creds)
 }
 

@@ -120,6 +120,31 @@ func ResolveRelayKey(ctx context.Context, creds *config.Credentials, group strin
 	return key, nil
 }
 
+// RefreshOAuthRelayKey unconditionally rotates an OAuth2-issued relay key.
+// Use this only after the current access token was rejected by the gateway.
+// Unlike proactive refresh, a refresh failure is returned and the rejected
+// key is never handed back to the caller.
+func RefreshOAuthRelayKey(ctx context.Context, creds *config.Credentials) (string, error) {
+	if creds == nil {
+		return "", errors.New("not signed in")
+	}
+	if creds.RefreshToken == "" || creds.OAuthClientID == "" {
+		return "", errors.New("OAuth2 refresh material is unavailable")
+	}
+	tok, err := New(config.ResolveAPIBaseForBase(creds.APIBase), "").OAuth2Refresh(ctx, creds.OAuthClientID, creds.RefreshToken)
+	if err != nil {
+		return "", fmt.Errorf("refresh OAuth2 relay key: %w", err)
+	}
+	creds.RelayKey = tok.AccessToken
+	creds.AccessToken = tok.AccessToken
+	creds.RefreshToken = tok.RefreshToken
+	creds.RelayKeyExpiresAt = tok.ExpiresAt
+	if saveErr := config.Save(creds); saveErr != nil {
+		return tok.AccessToken, &ErrCacheSave{Err: saveErr}
+	}
+	return tok.AccessToken, nil
+}
+
 // InvalidateCachedRelayKey clears the cached default-group relay key
 // (creds.RelayKey) and persists, so the next default-group
 // ResolveRelayKey re-picks the newest *enabled* token instead of
@@ -233,19 +258,13 @@ func refreshRelayKeyIfNeeded(ctx context.Context, creds *config.Credentials) (st
 	if time.Until(time.Unix(creds.RelayKeyExpiresAt, 0)) > relayKeyRefreshSkew {
 		return "", false, nil
 	}
-	tok, err := New(config.ResolveAPIBaseForBase(creds.APIBase), "").OAuth2Refresh(ctx, creds.OAuthClientID, creds.RefreshToken)
+	key, err := RefreshOAuthRelayKey(ctx, creds)
 	if err != nil {
+		var cacheErr *ErrCacheSave
+		if key != "" && errors.As(err, &cacheErr) {
+			return key, true, cacheErr.Err
+		}
 		return "", false, nil
 	}
-	// In OAuth2 mode the relay key is also the stored access token; keep both in
-	// sync so management-less commands that read AccessToken see the fresh key.
-	creds.RelayKey = tok.AccessToken
-	creds.AccessToken = tok.AccessToken
-	creds.RefreshToken = tok.RefreshToken
-	creds.RelayKeyExpiresAt = tok.ExpiresAt
-	// Surface a persist failure instead of swallowing it: the key just
-	// rotated, so a dropped Save means a re-refresh next run (or use of a
-	// stale cached key). The caller pairs this with *ErrCacheSave.
-	saveErr := config.Save(creds)
-	return tok.AccessToken, true, saveErr
+	return key, true, nil
 }

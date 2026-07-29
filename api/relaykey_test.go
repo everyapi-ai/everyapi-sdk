@@ -387,6 +387,37 @@ func TestResolveRelayKey_OAuth2_OutsideSkew_NoRefresh(t *testing.T) {
 	}
 }
 
+func TestRefreshOAuthRelayKey_ForcesRefreshOutsideSkew(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	var calls int32
+	srv := oauth2RefreshServer(t, &calls, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"access_token":  "sk-everyapi-forced",
+			"refresh_token": "rt-forced",
+			"expires_in":    172800,
+		})
+	})
+	creds := &config.Credentials{
+		APIBase:           srv.URL,
+		AccessToken:       "sk-everyapi-rejected",
+		RelayKey:          "sk-everyapi-rejected",
+		RefreshToken:      "rt-old",
+		OAuthClientID:     "cli-1",
+		RelayKeyExpiresAt: time.Now().Add(48 * time.Hour).Unix(),
+	}
+
+	got, err := RefreshOAuthRelayKey(context.Background(), creds)
+	if err != nil {
+		t.Fatalf("RefreshOAuthRelayKey: %v", err)
+	}
+	if got != "sk-everyapi-forced" || atomic.LoadInt32(&calls) != 1 {
+		t.Fatalf("got key %q after %d calls", got, calls)
+	}
+	if creds.RefreshToken != "rt-forced" {
+		t.Fatalf("refresh token = %q", creds.RefreshToken)
+	}
+}
+
 // TestResolveRelayKey_OAuth2_InsideSkew_RefreshPersists: an OAuth2 relay
 // key inside the 24h skew window is proactively refreshed; the rotated
 // key + refresh token + expiry are written back to creds AND persisted to

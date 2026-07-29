@@ -1,3 +1,3 @@
 module github.com/everyapi-ai/everyapi-sdk
 
-go 1.25.1
+go 1.25.12

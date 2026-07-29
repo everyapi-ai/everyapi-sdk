@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -102,6 +103,47 @@ func TestServer_RewritesAnthropicRequest(t *testing.T) {
 	if !bytes.Contains(got, []byte(PlaceholderPrefix)) {
 		t.Errorf("upstream didn't receive placeholder: %s", got)
 	}
+}
+
+func TestServer_RejectsOversizedRequestBeforeForwarding(t *testing.T) {
+	var upstreamCalls atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+
+	srv, err := New(Config{
+		Listen:       "127.0.0.1:0",
+		UpstreamBase: upstream.URL,
+		Logger:       log.New(io.Discard, "", 0),
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	req.Body = io.NopCloser(io.LimitReader(zeroReader{}, maxDecodedBody+1))
+	req.ContentLength = -1 // Exercise the chunked/unknown-length path too.
+	recorder := httptest.NewRecorder()
+
+	srv.handleProxy(recorder, req)
+
+	if recorder.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusRequestEntityTooLarge)
+	}
+	if got := upstreamCalls.Load(); got != 0 {
+		t.Fatalf("upstream calls = %d, want 0", got)
+	}
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 0
+	}
+	return len(p), nil
 }
 
 func TestServer_RestoresInResponse(t *testing.T) {

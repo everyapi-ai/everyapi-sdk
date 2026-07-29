@@ -32,6 +32,22 @@ type Client struct {
 	hc     *http.Client
 }
 
+// API endpoints consumed by the CLI return compact JSON envelopes. Bound the
+// response before buffering so a broken proxy or compromised endpoint cannot
+// exhaust the local process while it constructs an error or decodes JSON.
+const maxAPIResponseBytes int64 = 16 << 20
+
+func readAPIResponse(body io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(body, maxAPIResponseBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxAPIResponseBytes {
+		return nil, fmt.Errorf("response exceeds %d bytes", maxAPIResponseBytes)
+	}
+	return data, nil
+}
+
 func New(base, token string) *Client {
 	return &Client{
 		base:  base,
@@ -156,7 +172,7 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 		return fmt.Errorf("http request: %w", err)
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	data, err := readAPIResponse(resp.Body)
 	if err != nil {
 		return fmt.Errorf("read response: %w", err)
 	}

@@ -335,10 +335,18 @@ func (s *Server) pickProtocol(path string) Protocol {
 func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	s.stats.requests.Add(1)
 
-	// Read body.
+	// Bound the wire body before buffering it. The decoded-body limit below
+	// protects against compression bombs, but it cannot prevent an unencoded or
+	// poorly compressed request from exhausting memory during this first read.
+	r.Body = http.MaxBytesReader(w, r.Body, maxDecodedBody)
 	body, err := io.ReadAll(r.Body)
 	_ = r.Body.Close()
 	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			http.Error(w, "proxy: request body exceeds limit", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "proxy: read request body: "+err.Error(), http.StatusBadGateway)
 		return
 	}

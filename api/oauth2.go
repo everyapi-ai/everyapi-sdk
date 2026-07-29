@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -77,7 +76,10 @@ func (c *Client) oauth2Form(ctx context.Context, path string, form url.Values) (
 		return nil, 0, fmt.Errorf("http request: %w", err)
 	}
 	defer resp.Body.Close()
-	data, _ := io.ReadAll(resp.Body)
+	data, err := readAPIResponse(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("read response: %w", err)
+	}
 	var out oauth2Resp
 	_ = json.Unmarshal(data, &out) // non-JSON (e.g. a 404 page) leaves out empty
 	return &out, resp.StatusCode, nil

@@ -36,6 +36,14 @@ type Settings struct {
 	// GatewayRegion selects the official gateway when no explicit API base is
 	// supplied. Empty/global = api.everyapi.ai, cn = api-cn.everyapi.ai.
 	GatewayRegion string `json:"gateway_region,omitempty"`
+
+	// CodexHookTrustBypass controls whether `everyapi use codex` adds
+	// --dangerously-bypass-hook-trust. Nil means the user has not chosen yet.
+	CodexHookTrustBypass *bool `json:"codex_hook_trust_bypass,omitempty"`
+
+	// DangerousMode controls the target tool's "skip all confirmations" mode.
+	// Nil means the user has not chosen yet.
+	DangerousMode *bool `json:"dangerous_mode,omitempty"`
 }
 
 // settingsPath is the on-disk path. Same dir as credentialsPath

@@ -182,6 +182,29 @@ func TestDelete_Idempotent(t *testing.T) {
 	}
 }
 
+func TestSettingsSafetyPreferencesPersistExplicitTrueAndFalse(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	enabled := true
+	disabled := false
+	want := &Settings{
+		CodexHookTrustBypass: &enabled,
+		DangerousMode:        &disabled,
+	}
+	if err := SaveSettings(want); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+	got, err := LoadSettings()
+	if err != nil {
+		t.Fatalf("LoadSettings: %v", err)
+	}
+	if got.CodexHookTrustBypass == nil || !*got.CodexHookTrustBypass {
+		t.Fatalf("CodexHookTrustBypass = %v, want explicit true", got.CodexHookTrustBypass)
+	}
+	if got.DangerousMode == nil || *got.DangerousMode {
+		t.Fatalf("DangerousMode = %v, want explicit false", got.DangerousMode)
+	}
+}
+
 // TestEnsureLogPath verifies the shared log-path helper resolves under
 // the config dir, creates the dir if absent, and returns the joined path.
 func TestEnsureLogPath(t *testing.T) {

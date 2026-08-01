@@ -168,7 +168,7 @@ func (c *Client) AdminTestChannel(ctx context.Context, id int) (map[string]any, 
 		Message string         `json:"message"`
 		Data    map[string]any `json:"data"`
 	}
-	if err := c.do(ctx, "GET", fmt.Sprintf("/api/channel/test/%d", id), nil, &env); err != nil {
+	if err := c.do(ctx, "POST", fmt.Sprintf("/api/channel/test/%d", id), nil, &env); err != nil {
 		return nil, err
 	}
 	if !env.Success {

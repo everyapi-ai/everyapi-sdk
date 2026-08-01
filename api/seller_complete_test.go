@@ -83,47 +83,6 @@ func TestRefreshChannelCredential(t *testing.T) {
 	})
 }
 
-func TestSubmitCompensationClaim(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "POST" || r.URL.Path != "/api/seller/compensation-claim" {
-			t.Errorf("got %s %s", r.Method, r.URL.Path)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"success":true,"data":{"id":7,"status":"pending","suggested_cap":15000,"upstream_provider":"anthropic","description":"outage"}}`))
-	}))
-	defer srv.Close()
-	row, err := New(srv.URL, "acc").WithUserID(7).SubmitCompensationClaim(context.Background(), CompensationClaimSubmit{
-		UpstreamProvider: "anthropic", Description: "outage",
-	})
-	if err != nil {
-		t.Fatalf("SubmitCompensationClaim: %v", err)
-	}
-	if row.ID != 7 || row.SuggestedCap != 15000 || row.Status != "pending" {
-		t.Errorf("got %+v", row)
-	}
-}
-
-func TestListCompensationClaims(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/seller/compensation-claims" {
-			t.Errorf("path = %q", r.URL.Path)
-		}
-		if r.URL.Query().Get("status") != "pending" {
-			t.Errorf("status arg lost: %q", r.URL.RawQuery)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"success":true,"data":{"total":1,"items":[{"id":7,"status":"pending"}]}}`))
-	}))
-	defer srv.Close()
-	items, total, err := New(srv.URL, "acc").WithUserID(7).ListCompensationClaims(context.Background(), "pending", 0, 0)
-	if err != nil {
-		t.Fatalf("ListCompensationClaims: %v", err)
-	}
-	if total != 1 || len(items) != 1 || items[0].ID != 7 {
-		t.Errorf("got items=%+v total=%d", items, total)
-	}
-}
-
 func TestGetSellerSales(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/user/seller_sales" {

@@ -1,5 +1,5 @@
 // Channel-marketplace SDK additions: update / delete / refresh-
-// credential / compensation / sales. The original seller.go covers
+// credential / sales. The original seller.go covers
 // list / create / withdraw / eligibility / OAuth; this file adds
 // the remaining read-write surface so a seller can fully manage
 // their channels from the CLI.
@@ -118,87 +118,6 @@ func (c *Client) RefreshChannelCredential(ctx context.Context, channelID int, ki
 		return nil, errors.New(env.Message)
 	}
 	return &env.Data, nil
-}
-
-// --- Compensation claims ---------------------------------------------
-
-// CompensationClaimSubmit is the POST /api/seller/compensation-claim
-// payload. Backend trims + validates: provider non-empty (<=64 runes),
-// proof_url <=512, description non-empty (<=2000).
-type CompensationClaimSubmit struct {
-	UpstreamProvider string `json:"upstream_provider"`
-	ProofURL         string `json:"proof_url,omitempty"`
-	Description      string `json:"description"`
-}
-
-// CompensationClaim is the row returned by both Submit and List.
-// Status values are free-form strings the backend writes ("pending",
-// "approved", "rejected"); SuggestedCap is the model.Compute…
-// snapshot at file-time.
-type CompensationClaim struct {
-	ID               int    `json:"id"`
-	SellerUserID     int    `json:"seller_user_id"`
-	UpstreamProvider string `json:"upstream_provider"`
-	ProofURL         string `json:"proof_url"`
-	Description      string `json:"description"`
-	Status           string `json:"status"`
-	SuggestedCap     int64  `json:"suggested_cap"`
-	ApprovedAmount   int64  `json:"final_amount"`
-	FiledAt          int64  `json:"filed_at"`
-	UpdatedAt        int64  `json:"updated_at"`
-}
-
-// SubmitCompensationClaim files a new claim and returns the stored
-// row (including SuggestedCap, the backend-computed cap based on
-// the seller's recent revenue).
-func (c *Client) SubmitCompensationClaim(ctx context.Context, req CompensationClaimSubmit) (*CompensationClaim, error) {
-	var env struct {
-		Success bool              `json:"success"`
-		Message string            `json:"message"`
-		Data    CompensationClaim `json:"data"`
-	}
-	if err := c.do(ctx, "POST", "/api/seller/compensation-claim", req, &env); err != nil {
-		return nil, err
-	}
-	if !env.Success {
-		return nil, errors.New(env.Message)
-	}
-	return &env.Data, nil
-}
-
-// ListCompensationClaims pages the caller's submitted claims. Empty
-// status returns all states; otherwise pass "pending"/"approved"/
-// "rejected" to filter.
-func (c *Client) ListCompensationClaims(ctx context.Context, status string, page, pageSize int) ([]CompensationClaim, int, error) {
-	v := url.Values{}
-	if status != "" {
-		v.Set("status", status)
-	}
-	if page > 0 {
-		v.Set("p", strconv.Itoa(page))
-	}
-	if pageSize > 0 {
-		v.Set("page_size", strconv.Itoa(pageSize))
-	}
-	qs := ""
-	if encoded := v.Encode(); encoded != "" {
-		qs = "?" + encoded
-	}
-	var env struct {
-		Success bool   `json:"success"`
-		Message string `json:"message"`
-		Data    struct {
-			Items []CompensationClaim `json:"items"`
-			Total int                 `json:"total"`
-		} `json:"data"`
-	}
-	if err := c.do(ctx, "GET", "/api/seller/compensation-claims"+qs, nil, &env); err != nil {
-		return nil, 0, err
-	}
-	if !env.Success {
-		return nil, 0, errors.New(env.Message)
-	}
-	return env.Data.Items, env.Data.Total, nil
 }
 
 // --- Seller sales ----------------------------------------------------

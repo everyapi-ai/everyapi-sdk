@@ -160,7 +160,7 @@ func (c *Client) streamEvents(ctx context.Context, out chan<- Event) error {
 	// would kill the stream every 30s. Connection liveness is enforced
 	// by the idleDeadline check in the read loop below.
 	streamingClient := &http.Client{Transport: c.hc.Transport}
-	resp, err := streamingClient.Do(req)
+	resp, err := c.doHTTP(req, streamingClient)
 	if err != nil {
 		return fmt.Errorf("dial events: %w", err)
 	}

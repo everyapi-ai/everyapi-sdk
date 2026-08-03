@@ -4,12 +4,23 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/everyapi-ai/everyapi-sdk/config"
 )
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
 
 // TestPollUntilDone_HappyPath: pending → pending → authorized. The
 // poller must keep looping past pendings and stop on the authorized
@@ -139,6 +150,39 @@ func TestDeviceAuthStart_HappyPath(t *testing.T) {
 	}
 	if res.Interval != 5 {
 		t.Errorf("Interval = %d", res.Interval)
+	}
+}
+
+func TestClient_RetriesChinaGatewayOnDNSNotFound(t *testing.T) {
+	var hosts []string
+	c := New(config.ChinaAPIBase, "")
+	c.hc.Transport = roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		hosts = append(hosts, r.URL.Host)
+		if r.URL.Host == "api-cn.everyapi.ai" {
+			return nil, &net.DNSError{Name: r.URL.Host, IsNotFound: true}
+		}
+		if r.URL.Host != "api.everyapi.ai" {
+			t.Fatalf("request host = %q, want China gateway then global fallback", r.URL.Host)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body: io.NopCloser(strings.NewReader(`{"success":true,"data":{
+				"device_code":"dev-abc","user_code":"USER-CODE",
+				"verification_uri":"https://everyapi.ai/cli/auth","expires_in":600,"interval":5
+			}}`)),
+		}, nil
+	})
+
+	res, err := c.DeviceAuthStart(context.Background())
+	if err != nil {
+		t.Fatalf("DeviceAuthStart: %v", err)
+	}
+	if res.DeviceCode != "dev-abc" {
+		t.Errorf("DeviceCode = %q, want dev-abc", res.DeviceCode)
+	}
+	if got, want := strings.Join(hosts, ","), "api-cn.everyapi.ai,api.everyapi.ai"; got != want {
+		t.Errorf("request hosts = %q, want %q", got, want)
 	}
 }
 

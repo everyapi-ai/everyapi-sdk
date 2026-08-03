@@ -71,7 +71,7 @@ func (c *Client) oauth2Form(ctx context.Context, path string, form url.Values) (
 		return nil, 0, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := c.hc.Do(req)
+	resp, err := c.doHTTP(req, c.hc)
 	if err != nil {
 		return nil, 0, fmt.Errorf("http request: %w", err)
 	}

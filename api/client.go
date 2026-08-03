@@ -15,11 +15,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/everyapi-ai/everyapi-sdk/config"
 )
 
 // Client wraps http.Client with a base URL and the user's access
@@ -92,6 +96,46 @@ func (c *Client) WithCookieJar() *Client {
 func (c *Client) WithUserID(id int) *Client {
 	c.userID = id
 	return c
+}
+
+// doHTTP sends req and retries the global official gateway exactly once when
+// the China gateway name has no DNS record. This keeps an existing `cn`
+// preference usable during a DNS control-plane outage, without treating
+// timeouts, TLS errors, API responses, or authentication failures as a reason
+// to silently change regions.
+func (c *Client) doHTTP(req *http.Request, hc *http.Client) (*http.Response, error) {
+	resp, err := hc.Do(req)
+	if err == nil {
+		return resp, nil
+	}
+
+	var dnsErr *net.DNSError
+	if !errors.As(err, &dnsErr) || !dnsErr.IsNotFound || req.URL.Host != "api-cn.everyapi.ai" {
+		return nil, err
+	}
+	// A request body must be recreated for the second attempt. All SDK request
+	// builders supply GetBody, but decline the retry if a future caller does
+	// not: replaying a partially consumed write would be unsafe.
+	if req.Body != nil && req.GetBody == nil {
+		return nil, err
+	}
+
+	globalBase, parseErr := url.Parse(config.DefaultAPIBase)
+	if parseErr != nil {
+		return nil, err // constant is controlled locally; retain the original error if it is ever malformed
+	}
+	fallback := req.Clone(req.Context())
+	fallback.URL.Scheme = globalBase.Scheme
+	fallback.URL.Host = globalBase.Host
+	fallback.Host = ""
+	if req.GetBody != nil {
+		body, bodyErr := req.GetBody()
+		if bodyErr != nil {
+			return nil, err
+		}
+		fallback.Body = body
+	}
+	return hc.Do(fallback)
 }
 
 // APIError surfaces a non-2xx server response. Code == 401 is the
@@ -167,7 +211,7 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	if lang := os.Getenv("EVERYAPI_LANG"); lang != "" {
 		req.Header.Set("Accept-Language", lang)
 	}
-	resp, err := c.hc.Do(req)
+	resp, err := c.doHTTP(req, c.hc)
 	if err != nil {
 		return fmt.Errorf("http request: %w", err)
 	}

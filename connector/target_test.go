@@ -26,6 +26,8 @@ func TestDefaultRegistryDecidesModelTrafficByOfficialOrigin(t *testing.T) {
 		{name: "openai responses compact", host: "api.openai.com", method: http.MethodPost, path: "/v1/responses/compact", want: ActionRelay},
 		{name: "gemini generate", host: "generativelanguage.googleapis.com", method: http.MethodPost, path: "/v1beta/models/gemini-2.5-pro:generateContent", want: ActionRelay},
 		{name: "gemini stream", host: "generativelanguage.googleapis.com", method: http.MethodPost, path: "/v1beta/models/gemini-2.5-pro:streamGenerateContent", want: ActionRelay},
+		{name: "anthropic model discovery", host: "api.anthropic.com", method: http.MethodGet, path: "/v1/models", want: ActionRelay},
+		{name: "anthropic model detail", host: "api.anthropic.com", method: http.MethodGet, path: "/v1/models/claude-test", want: ActionRelay},
 		{name: "official non-model endpoint", host: "api.anthropic.com", method: http.MethodGet, path: "/api/oauth/profile", want: ActionDirect},
 		{name: "unknown sensitive endpoint", host: "api.openai.com", method: http.MethodPost, path: "/v1/future-model-api", want: ActionBlock},
 		{name: "unregistered host", host: "example.com", method: http.MethodPost, path: "/v1/responses", want: ActionDirect},

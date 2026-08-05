@@ -180,10 +180,12 @@ func DefaultTargets() []Target {
 			Name:  "anthropic",
 			Hosts: []string{"api.anthropic.com"},
 			Routes: []Route{
+				{Method: http.MethodGet, Exact: "/v1/models", Action: ActionRelay},
+				{Method: http.MethodGet, Prefix: "/v1/models/", Action: ActionRelay},
 				{Method: http.MethodPost, Exact: "/v1/messages/count_tokens", Action: ActionRelay},
 				{Method: http.MethodPost, Exact: "/v1/messages", Action: ActionRelay},
 			},
-			SensitivePrefixes: []string{"/v1/messages"},
+			SensitivePrefixes: []string{"/v1/messages", "/v1/models"},
 		},
 		{
 			Name:  "openai",

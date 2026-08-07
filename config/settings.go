@@ -44,6 +44,42 @@ type Settings struct {
 	// DangerousMode controls the target tool's "skip all confirmations" mode.
 	// Nil means the user has not chosen yet.
 	DangerousMode *bool `json:"dangerous_mode,omitempty"`
+
+	// ToolModels remembers the model each tool was last launched with,
+	// keyed by tool name ("claude", "codex", …). Absent or missing entry
+	// means the user has not chosen for that tool yet, which is what
+	// makes the first launch prompt and later ones not.
+	//
+	// Kept here rather than in each client's own config because the
+	// clients that need it most cannot hold it themselves: `everyapi use`
+	// hands codex a process-scoped CODEX_HOME that is deleted on exit, so
+	// anything codex writes about its own model is gone by the next
+	// launch. omitempty so a settings file written before this field
+	// round-trips unchanged.
+	ToolModels map[string]string `json:"tool_models,omitempty"`
+}
+
+// ToolModel returns the remembered model for a tool, or "" when the user
+// has not chosen one yet.
+func (s *Settings) ToolModel(tool string) string {
+	if s == nil {
+		return ""
+	}
+	return s.ToolModels[tool]
+}
+
+// SetToolModel records the model a tool should boot with. An empty model
+// clears the entry, so a caller that fails to resolve a selection does not
+// pin the tool to a stale one.
+func (s *Settings) SetToolModel(tool, model string) {
+	if model == "" {
+		delete(s.ToolModels, tool)
+		return
+	}
+	if s.ToolModels == nil {
+		s.ToolModels = make(map[string]string, 1)
+	}
+	s.ToolModels[tool] = model
 }
 
 // settingsPath is the on-disk path. Same dir as credentialsPath

@@ -735,3 +735,66 @@ func TestServer_NonJSONOnSanitisablePathWarns(t *testing.T) {
 		t.Errorf("expected a loud non-JSON warning, log was: %q", logbuf.String())
 	}
 }
+
+// TestServer_MiddlewareWrapsRelayButNotControlEndpoints pins the contract an
+// in-process caller relies on to host its own transforms here instead of
+// chaining a second loopback proxy in front: the middleware sees relay traffic,
+// can short-circuit it, and can hand the rest to the sanitizer — but never
+// intercepts /__sanitizer/*. A middleware that shadowed the health endpoint
+// would hang the caller's readiness probe, and one that shadowed status would
+// break `everyapi proxy status`.
+func TestServer_MiddlewareWrapsRelayButNotControlEndpoints(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"reached":"upstream"}`)
+	}))
+	defer upstream.Close()
+
+	var wrapped atomic.Int64
+	srv, err := New(Config{
+		Listen:       "127.0.0.1:0",
+		UpstreamBase: upstream.URL,
+		Logger:       log.New(io.Discard, "", 0),
+		Middleware: func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				wrapped.Add(1)
+				if r.URL.Path == "/v1/models" {
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = io.WriteString(w, `{"reached":"middleware"}`)
+					return
+				}
+				next.ServeHTTP(w, r)
+			})
+		},
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	// Short-circuited: answered by the middleware, upstream never consulted.
+	recorder := httptest.NewRecorder()
+	srv.http.Handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+	if body := recorder.Body.String(); !strings.Contains(body, `"middleware"`) {
+		t.Fatalf("/v1/models = %q, want the middleware's own response", body)
+	}
+
+	// Delegated: the middleware ran, then the sanitizer relayed upstream.
+	recorder = httptest.NewRecorder()
+	srv.http.Handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"m"}`)))
+	if body := recorder.Body.String(); !strings.Contains(body, `"upstream"`) {
+		t.Fatalf("/v1/messages = %q, want the relayed upstream response", body)
+	}
+
+	// Control endpoints bypass it entirely.
+	for _, path := range []string{"/__sanitizer/health", "/__sanitizer/status"} {
+		before := wrapped.Load()
+		recorder = httptest.NewRecorder()
+		srv.http.Handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, want 200", path, recorder.Code)
+		}
+		if got := wrapped.Load(); got != before {
+			t.Fatalf("%s went through the middleware; a broken one would take the readiness probe with it", path)
+		}
+	}
+}

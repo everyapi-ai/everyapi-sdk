@@ -73,6 +73,20 @@ type Config struct {
 	// leaked tool-control patterns are dropped while structured tool events
 	// continue unchanged.
 	GuardClaudeToolCorruption bool
+
+	// Middleware, when non-nil, wraps the relay handler. It sees the "/" route
+	// only — never the /__sanitizer/* control endpoints, so a middleware can
+	// neither shadow nor break the readiness probe an in-process caller depends
+	// on. The handler passed to it relays to UpstreamBase, so a middleware that
+	// only wants to observe or rewrite calls straight through.
+	//
+	// This exists so an in-process caller can host an extra request transform on
+	// THIS server's socket rather than chaining a second loopback proxy in front
+	// of it. Chained proxies cost a port, a log file and a failure point each,
+	// and the chain's length then grows with the number of transforms; hosting
+	// them keeps it flat. Transforms that must run for every deployment belong
+	// in the server itself — this is for ones the caller composes per launch.
+	Middleware func(http.Handler) http.Handler
 }
 
 func (c *Config) applyDefaults() {
@@ -140,10 +154,18 @@ func New(cfg Config) (*Server, error) {
 	s.stats.startedAt = time.Now()
 	s.stats.startedAtMu.Unlock()
 
+	// Control endpoints are registered outside the middleware: the readiness
+	// probe in particular must answer even if a caller's middleware is broken,
+	// or an in-process launch would hang waiting for a health check its own
+	// transform is swallowing.
+	var relay http.Handler = http.HandlerFunc(s.handleProxy)
+	if cfg.Middleware != nil {
+		relay = cfg.Middleware(relay)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/__sanitizer/status", s.handleStatus)
 	mux.HandleFunc("/__sanitizer/health", s.handleHealth)
-	mux.HandleFunc("/", s.handleProxy)
+	mux.Handle("/", relay)
 
 	s.http = &http.Server{
 		Addr:              cfg.Listen,

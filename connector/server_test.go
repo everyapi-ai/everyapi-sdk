@@ -593,6 +593,150 @@ func TestServerStripsGatewayFingerprintHeaders(t *testing.T) {
 	}
 }
 
+func TestServerReplacesRelayedHTMLErrorWithCompactJSON(t *testing.T) {
+	t.Parallel()
+
+	const cloudflareRay = "a2811c05a85fa9f1-NRT"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=UTF-8")
+		w.Header().Set("Cf-Ray", cloudflareRay)
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = io.WriteString(w, "<!DOCTYPE html><html><title>everyapi.ai | 502: Bad gateway</title></html>")
+	}))
+	defer upstream.Close()
+
+	proxyURL, roots, stop := startTestConnector(t, upstream.URL, "relay")
+	defer stop()
+	resp, err := proxyClient(proxyURL, roots).Post(
+		"https://api.openai.com/v1/responses",
+		"application/json",
+		strings.NewReader(`{}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", got)
+	}
+	if got := resp.Header.Get("Cf-Ray"); got != cloudflareRay {
+		t.Fatalf("Cf-Ray = %q, want %q", got, cloudflareRay)
+	}
+	const want = `{"error":{"message":"EveryAPI gateway returned 502 Bad Gateway","type":"upstream_error","code":"gateway_unavailable"}}`
+	if string(body) != want {
+		t.Fatalf("body = %q, want %q", body, want)
+	}
+}
+
+func TestServerLeavesNonOpenAIHTMLErrorProtocolUnchanged(t *testing.T) {
+	t.Parallel()
+
+	const upstreamBody = "<!DOCTYPE html><html><title>provider maintenance</title></html>"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = io.WriteString(w, upstreamBody)
+	}))
+	defer upstream.Close()
+
+	proxyURL, roots, stop := startTestConnector(t, upstream.URL, "relay")
+	defer stop()
+	resp, err := proxyClient(proxyURL, roots).Post(
+		"https://api.anthropic.com/v1/messages",
+		"application/json",
+		strings.NewReader(`{}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := string(body); got != upstreamBody {
+		t.Fatalf("body = %q, want unchanged Anthropic payload %q", got, upstreamBody)
+	}
+}
+
+func TestReplaceRelayedOpenAIHTMLErrorSniffsGenericContentType(t *testing.T) {
+	body := "<!DOCTYPE html><html><title>502 Bad Gateway</title></html>"
+	resp := &http.Response{
+		StatusCode: http.StatusBadGateway,
+		Header:     http.Header{"Content-Type": []string{"application/octet-stream"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+
+	if !replaceRelayedOpenAIHTMLError(resp) {
+		t.Fatal("generic-content-type HTML response was not replaced")
+	}
+}
+
+func TestReplaceRelayedOpenAIHTMLErrorPreservesMislabeledJSON(t *testing.T) {
+	const body = `{"error":{"message":"structured upstream error"}}`
+	resp := &http.Response{
+		StatusCode:    http.StatusBadGateway,
+		Header:        http.Header{"Content-Type": []string{"text/html"}},
+		Body:          io.NopCloser(strings.NewReader(body)),
+		ContentLength: int64(len(body)),
+	}
+
+	if replaceRelayedOpenAIHTMLError(resp) {
+		t.Fatal("JSON response mislabeled as text/html was replaced")
+	}
+	got, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != body {
+		t.Fatalf("body = %q, want preserved JSON %q", got, body)
+	}
+}
+
+func TestReplaceRelayedOpenAIHTMLErrorDrainsCompactBody(t *testing.T) {
+	body := "<!DOCTYPE html><html><title>502 Bad Gateway</title>" + strings.Repeat("x", 1024) + "</html>"
+	reader := strings.NewReader(body)
+	resp := &http.Response{
+		StatusCode: http.StatusBadGateway,
+		Header:     http.Header{"Content-Type": []string{"text/html"}},
+		Body:       io.NopCloser(reader),
+	}
+
+	if !replaceRelayedOpenAIHTMLError(resp) {
+		t.Fatal("HTML response was not replaced")
+	}
+	if reader.Len() != 0 {
+		t.Fatalf("original body retained %d unread bytes", reader.Len())
+	}
+}
+
+func TestReplaceRelayedOpenAIHTMLErrorBoundsDrain(t *testing.T) {
+	body := "<!DOCTYPE html>" + strings.Repeat("x", maxRelayedErrorDrainBytes*2)
+	reader := strings.NewReader(body)
+	resp := &http.Response{
+		StatusCode: http.StatusBadGateway,
+		Header:     http.Header{"Content-Type": []string{"text/html"}},
+		Body:       io.NopCloser(reader),
+	}
+
+	if !replaceRelayedOpenAIHTMLError(resp) {
+		t.Fatal("HTML response was not replaced")
+	}
+	if read := len(body) - reader.Len(); read > maxRelayedErrorDrainBytes+1 {
+		t.Fatalf("read %d bytes from original body, want at most %d", read, maxRelayedErrorDrainBytes+1)
+	}
+}
+
 func TestServerStripsClientCredentialsFromGeminiQuery(t *testing.T) {
 	t.Parallel()
 

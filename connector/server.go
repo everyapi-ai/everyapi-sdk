@@ -2,6 +2,7 @@ package connector
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -534,10 +535,64 @@ func (s *Server) roundTrip(in *http.Request, officialHost string, action Action)
 		_ = in.Body.Close()
 		return nil
 	}
+	if action == ActionRelay && normalizeHost(officialHost) == "api.openai.com" && replaceRelayedOpenAIHTMLError(resp) {
+		s.logger.Printf("connector: replaced relayed HTML error for %s %s (status %d)", in.Method, in.URL.Path, resp.StatusCode)
+	}
 	removeHopByHop(resp.Header)
 	stripGatewayFingerprintHeaders(resp.Header)
 	normalizeResponseForHTTP11(resp, in.Method)
 	return resp
+}
+
+const maxRelayedErrorDrainBytes = 64 << 10
+
+type replayReadCloser struct {
+	io.Reader
+	io.Closer
+}
+
+func replaceRelayedOpenAIHTMLError(resp *http.Response) bool {
+	if resp == nil || resp.StatusCode < http.StatusBadRequest || resp.Body == nil {
+		return false
+	}
+
+	originalBody := resp.Body
+	prefix := make([]byte, 512)
+	n, err := io.ReadFull(originalBody, prefix)
+	prefix = prefix[:n]
+	resp.Body = &replayReadCloser{
+		Reader: io.MultiReader(bytes.NewReader(prefix), originalBody),
+		Closer: originalBody,
+	}
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return false
+	}
+
+	trimmed := bytes.TrimSpace(prefix)
+	if len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[') {
+		return false
+	}
+	declaredType := strings.TrimSpace(strings.SplitN(resp.Header.Get("Content-Type"), ";", 2)[0])
+	detectedType := strings.TrimSpace(strings.SplitN(http.DetectContentType(prefix), ";", 2)[0])
+	if !strings.EqualFold(declaredType, "text/html") && !strings.EqualFold(detectedType, "text/html") {
+		return false
+	}
+
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxRelayedErrorDrainBytes+1))
+	_ = resp.Body.Close()
+	status := fmt.Sprintf("%d", resp.StatusCode)
+	if statusText := http.StatusText(resp.StatusCode); statusText != "" {
+		status += " " + statusText
+	}
+	body := fmt.Sprintf(`{"error":{"message":"EveryAPI gateway returned %s","type":"upstream_error","code":"gateway_unavailable"}}`, status)
+	resp.Body = io.NopCloser(strings.NewReader(body))
+	resp.ContentLength = int64(len(body))
+	resp.TransferEncoding = nil
+	resp.Uncompressed = false
+	resp.Header.Set("Content-Type", "application/json")
+	resp.Header.Del("Content-Encoding")
+	resp.Header.Del("Content-Length")
+	return true
 }
 
 // normalizeResponseForHTTP11 bridges the upstream transport protocol to the

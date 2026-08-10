@@ -8,9 +8,13 @@ import (
 // payload has affiliate / settings / etc. fields the CLI doesn't
 // need today; keeping the struct narrow avoids accidental coupling.
 type SelfData struct {
-	ID           int    `json:"id"`
-	Username     string `json:"username"`
-	Email        string `json:"email"`
+	ID       int    `json:"id"`
+	Username string `json:"username"`
+	Email    string `json:"email"`
+	// AvatarURL is the account's profile picture, already normalized and
+	// re-hosted by the backend's own /api/avatar/:id proxy (never a third-party
+	// URL, even for OAuth-sourced pictures). Empty when the user has none.
+	AvatarURL    string `json:"avatar_url"`
 	Quota        int64  `json:"quota"`
 	UsedQuota    int64  `json:"used_quota"`
 	RequestCount int64  `json:"request_count"`

@@ -132,6 +132,12 @@ type Credentials struct {
 	// hide admin-only subcommands locally. Empty/0 in files written
 	// before this field existed — re-login or `status` repopulates.
 	Role int `json:"role,omitempty"`
+	// AvatarURL mirrors the account's profile picture URL from
+	// /api/user/self. Persisted at login and opportunistically refreshed by
+	// `everyapi auth status` — same lifecycle as Role — so a local status read
+	// can report it without a network round-trip. Empty when the account has no
+	// picture or the file predates this field.
+	AvatarURL string `json:"avatar_url,omitempty"`
 }
 
 // IsAdmin reports whether the credential holder can drive

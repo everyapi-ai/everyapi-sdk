@@ -281,24 +281,63 @@ func (c *Client) UserModels(ctx context.Context) ([]UserModel, error) {
 	return out, nil
 }
 
-// UserGroups returns every configured route-group entity keyed by stable ID.
-// Callers display Name, send ID on the wire, and offer only Usable entities
-// for new selections. The special "auto" entity is included when configured.
+// UserGroups returns every configured route-group entity keyed by stable ID,
+// as an ANONYMOUS caller sees it. Callers display Name, send ID on the wire,
+// and offer only Usable entities for new selections. The special "auto" entity
+// is included when configured.
+//
+// /api/user/groups is mounted outside UserAuth, so the backend resolves it with
+// user id 0 even when a credential is attached: Usable and Ratio describe the
+// anonymous tier, not the signed-in account. Anything gating on what THIS
+// account may do — offering a group, predicting whether a create will be
+// accepted — must call SelfGroups instead.
 func (c *Client) UserGroups(ctx context.Context) (map[string]GroupInfo, error) {
+	return c.routeGroups(ctx, "/api/user/groups")
+}
+
+// SelfGroups returns the same entities projected onto the SIGNED-IN account:
+// Usable answers "may this account point a key at that group", which is the
+// question the gateway asks when it validates a token create. Needs a
+// management credential — the mount is behind UserAuth.
+func (c *Client) SelfGroups(ctx context.Context) (map[string]GroupInfo, error) {
+	return c.routeGroups(ctx, "/api/user/self/groups")
+}
+
+// autoGroupUsable answers whether this account may point a key at the auto
+// group, per the same CanUserUseAutoGroup the gateway enforces when validating
+// a token create and when expanding "auto" into a pool list.
+func (c *Client) autoGroupUsable(ctx context.Context) (bool, error) {
+	groups, err := c.SelfGroups(ctx)
+	if err != nil {
+		return false, err
+	}
+	return groups[GroupAuto].Usable, nil
+}
+
+func (c *Client) routeGroups(ctx context.Context, path string) (map[string]GroupInfo, error) {
 	var env struct {
 		Success bool                 `json:"success"`
 		Message string               `json:"message"`
 		Data    map[string]GroupInfo `json:"data"`
 	}
-	if err := c.do(ctx, "GET", "/api/user/groups", nil, &env); err != nil {
+	if err := c.do(ctx, "GET", path, nil, &env); err != nil {
 		return nil, err
 	}
 	if !env.Success {
 		return nil, errors.New(env.Message)
 	}
+	// A mismatched ID means the shape is wrong and nothing in the map can be
+	// trusted. A blank NAME is a per-entity gap, not a broken response: the
+	// authenticated mount also returns pools the caller cannot select, and a
+	// pool with a ratio but no entry in the usable-groups display map resolves
+	// to "". Rejecting the whole map for one of those took down every caller —
+	// drop the unnamed entity and keep the rest.
 	for id, group := range env.Data {
-		if group.ID != id || strings.TrimSpace(group.Name) == "" {
+		if group.ID != id {
 			return nil, errors.New("invalid route group response")
+		}
+		if strings.TrimSpace(group.Name) == "" {
+			delete(env.Data, id)
 		}
 	}
 	return env.Data, nil

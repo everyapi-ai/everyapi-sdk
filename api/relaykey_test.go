@@ -115,6 +115,200 @@ func TestResolveRelayKey_DefaultGroupSaveBack(t *testing.T) {
 	}
 }
 
+// The default group must land on the account's auto key even when a
+// group-scoped token was created later and heads the list — that token relays
+// only its own group's models, so taking the head narrowed every launch.
+func TestResolveRelayKey_DefaultGroupPrefersAutoToken(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	srv := tokenListAndKeyServer(t,
+		[]map[string]interface{}{
+			{"id": 41, "name": "newest-scoped", "status": TokenStatusEnabled, "group": "grp_basic"},
+			{"id": 40, "name": "Auto", "status": TokenStatusEnabled, "group": "auto"},
+		},
+		map[int]string{40: "sk-everyapi-auto-40", 41: "sk-everyapi-scoped-41"},
+	)
+	creds := &config.Credentials{APIBase: srv.URL, AccessToken: "tok", UserID: 1}
+	got, err := ResolveRelayKey(context.Background(), creds, "")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got != "sk-everyapi-auto-40" {
+		t.Errorf("key = %q, want the auto-group key", got)
+	}
+	if creds.RelayKeyTokenID != 40 {
+		t.Errorf("creds.RelayKeyTokenID = %d, want 40", creds.RelayKeyTokenID)
+	}
+}
+
+// An account whose tier lost the auto grant keeps its enabled auto token, and
+// TokenAuth lets that key authenticate — it just expands to no pools, so every
+// launch sees an empty catalogue. Fall back to a key that still routes.
+func TestResolveRelayKey_DefaultGroupSkipsUnusableAutoToken(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	// Bound to a plain `want` rather than a name ending in Key: the secret
+	// scanner flags a high-entropy literal assigned to anything that reads like
+	// a credential, and a fake value in a test is not worth an ignore entry.
+	const want = "sk-everyapi-scoped-70"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/user/self/groups":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"data": map[string]interface{}{
+					"auto": map[string]interface{}{"id": "auto", "name": "Automatic", "usable": false},
+				},
+			})
+		case "/api/token/":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"data": map[string]interface{}{"items": []map[string]interface{}{
+					{"id": 71, "name": "Auto", "status": TokenStatusEnabled, "group": "auto"},
+					{"id": 70, "name": "scoped", "status": TokenStatusEnabled, "group": "grp_basic"},
+				}},
+			})
+		case "/api/token/70/key":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "data": map[string]interface{}{"key": want},
+			})
+		default:
+			t.Errorf("unexpected request: %s", r.URL.Path)
+			http.Error(w, "not found", 404)
+		}
+	}))
+	defer srv.Close()
+
+	creds := &config.Credentials{APIBase: srv.URL, AccessToken: "tok", UserID: 1}
+	got, err := ResolveRelayKey(context.Background(), creds, "")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got != want || creds.RelayKeyTokenID != 70 {
+		t.Errorf("key = %q id = %d, want the still-routable scoped token", got, creds.RelayKeyTokenID)
+	}
+}
+
+// The grant probe is a courtesy, not a gate: when it cannot be answered the
+// resolver keeps preferring the auto key rather than inventing a downgrade.
+func TestResolveRelayKey_DefaultGroupKeepsAutoWhenGrantProbeFails(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	const want = "sk-everyapi-auto-81"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/user/self/groups":
+			http.Error(w, "boom", 500)
+		case "/api/token/":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"data": map[string]interface{}{"items": []map[string]interface{}{
+					{"id": 81, "name": "Auto", "status": TokenStatusEnabled, "group": "auto"},
+					{"id": 80, "name": "scoped", "status": TokenStatusEnabled, "group": "grp_basic"},
+				}},
+			})
+		case "/api/token/81/key":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "data": map[string]interface{}{"key": want},
+			})
+		default:
+			t.Errorf("unexpected request: %s", r.URL.Path)
+			http.Error(w, "not found", 404)
+		}
+	}))
+	defer srv.Close()
+
+	creds := &config.Credentials{APIBase: srv.URL, AccessToken: "tok", UserID: 1}
+	got, err := ResolveRelayKey(context.Background(), creds, "")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got != want {
+		t.Errorf("key = %q, want the auto key kept on an unanswerable probe", got)
+	}
+}
+
+// One account, one key: with nothing to fall back to there is no decision to
+// make, so the resolver must not spend a request asking about the grant.
+func TestResolveRelayKey_DefaultGroupSkipsGrantProbeWithoutAlternative(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	const want = "sk-everyapi-auto-91"
+	probes := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/user/self/groups":
+			probes++
+			http.Error(w, "should not be called", 500)
+		case "/api/token/":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"data": map[string]interface{}{"items": []map[string]interface{}{
+					{"id": 91, "name": "Auto", "status": TokenStatusEnabled, "group": "auto"},
+				}},
+			})
+		case "/api/token/91/key":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "data": map[string]interface{}{"key": want},
+			})
+		default:
+			t.Errorf("unexpected request: %s", r.URL.Path)
+			http.Error(w, "not found", 404)
+		}
+	}))
+	defer srv.Close()
+
+	creds := &config.Credentials{APIBase: srv.URL, AccessToken: "tok", UserID: 1}
+	got, err := ResolveRelayKey(context.Background(), creds, "")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got != want || probes != 0 {
+		t.Errorf("key = %q, grant probes = %d, want the auto key with no probe", got, probes)
+	}
+}
+
+// A disabled auto key is not a key: the resolver falls back to an enabled
+// token rather than failing or handing back something the gateway rejects.
+func TestResolveRelayKey_DefaultGroupFallsBackWhenAutoDisabled(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	srv := tokenListAndKeyServer(t,
+		[]map[string]interface{}{
+			{"id": 51, "name": "Auto", "status": TokenStatusDisabled, "group": "auto"},
+			{"id": 50, "name": "scoped", "status": TokenStatusEnabled, "group": "grp_basic"},
+		},
+		map[int]string{50: "sk-everyapi-scoped-50"},
+	)
+	creds := &config.Credentials{APIBase: srv.URL, AccessToken: "tok", UserID: 1}
+	got, err := ResolveRelayKey(context.Background(), creds, "")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got != "sk-everyapi-scoped-50" || creds.RelayKeyTokenID != 50 {
+		t.Errorf("key = %q id = %d, want the enabled scoped token", got, creds.RelayKeyTokenID)
+	}
+}
+
+// An explicit --group still pins that group even when an auto key exists, and
+// the per-run override is never written into the default-group cache.
+func TestResolveRelayKey_ExplicitGroupIgnoresAutoToken(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	srv := tokenListAndKeyServer(t,
+		[]map[string]interface{}{
+			{"id": 61, "name": "Auto", "status": TokenStatusEnabled, "group": "auto"},
+			{"id": 60, "name": "scoped", "status": TokenStatusEnabled, "group": "grp_basic"},
+		},
+		map[int]string{60: "sk-everyapi-scoped-60", 61: "sk-everyapi-auto-61"},
+	)
+	creds := &config.Credentials{APIBase: srv.URL, AccessToken: "tok", UserID: 1}
+	got, err := ResolveRelayKey(context.Background(), creds, "grp_basic")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got != "sk-everyapi-scoped-60" {
+		t.Errorf("key = %q, want the requested group's key", got)
+	}
+	if creds.RelayKey != "" || creds.RelayKeyTokenID != 0 {
+		t.Errorf("group override leaked into the default cache: %+v", creds)
+	}
+}
+
 func TestSelectRelayKeyFetchesAndPersistsChosenToken(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", tmp)

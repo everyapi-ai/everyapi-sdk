@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -173,6 +174,31 @@ func TestUserGroupsRejectsLegacyDescriptionShape(t *testing.T) {
 	defer srv.Close()
 	if _, err := New(srv.URL, "acc").UserGroups(context.Background()); err == nil {
 		t.Fatal("legacy route-group response unexpectedly accepted")
+	}
+}
+
+// The two accessors differ only by mount, and the mount is the whole point:
+// /api/user/groups sits outside UserAuth and answers for the anonymous tier,
+// so anything asking what THIS account may do has to hit the self route.
+func TestUserGroupsAndSelfGroupsUseTheirOwnMounts(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"success":true,"data":{"auto":{"id":"auto","name":"Automatic","ratio":"Auto","usable":true}}}`))
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "acc").WithUserID(7)
+	if _, err := client.UserGroups(context.Background()); err != nil {
+		t.Fatalf("UserGroups: %v", err)
+	}
+	if _, err := client.SelfGroups(context.Background()); err != nil {
+		t.Fatalf("SelfGroups: %v", err)
+	}
+	want := []string{"/api/user/groups", "/api/user/self/groups"}
+	if !reflect.DeepEqual(paths, want) {
+		t.Fatalf("requested paths = %v, want %v", paths, want)
 	}
 }
 

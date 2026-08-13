@@ -3,7 +3,8 @@
 // with the same precedence rules:
 //
 //   - default group + cached key on creds → cache hit, no API call
-//   - default group + no cache → newest enabled token, fetch +
+//   - default group + no cache → the enabled auto-group token when the
+//     account has one, else the newest enabled token; fetch +
 //     write back into creds + persist via config.Save (Save errors
 //     are surfaced as a wrapping error; caller decides whether to
 //     downgrade them)
@@ -28,6 +29,12 @@ import (
 // relayKeyRefreshSkew renews an OAuth2-issued relay key once it's within a day
 // of expiry, so a still-valid key is swapped out before it can lapse.
 const relayKeyRefreshSkew = 24 * time.Hour
+
+// GroupAuto is the reserved token group that routes across every group the
+// account can reach, instead of pinning traffic to one of them. Exported
+// because the CLI creates keys in it and reads its grant, and a second literal
+// that drifts from this one would silently un-do the resolution rule below.
+const GroupAuto = "auto"
 
 // ErrNoRelayKey: account has zero enabled relay API keys the caller
 // can use. Callers map this to actionable UI ("create one in
@@ -84,23 +91,68 @@ func ResolveRelayKey(ctx context.Context, creds *config.Credentials, group strin
 	if err != nil {
 		return "", fmt.Errorf("look up relay API key: %w", err)
 	}
-	var pick *TokenSummary
+	// Default group: prefer the auto-group token. It is the only key that
+	// routes across every group the account can reach, so it is what a
+	// launch with no explicit --group should ride. Taking the list head
+	// instead handed the default to whatever token was created last — a
+	// key scoped to one group, whose /v1/models is a subset of the
+	// account's models, silently narrowing every client launched after it.
+	// Any other enabled token remains the fallback for accounts without an
+	// auto key; the resolver never creates one on this path.
+	// The default arm scans the whole list rather than stopping at the auto
+	// token: knowing whether ANY other enabled key exists is what makes the
+	// grant check below decidable, and an early break left that unknown.
+	var pick, autoPick, fallback *TokenSummary
 	for i := range tokens {
 		if tokens[i].Status != TokenStatusEnabled {
 			continue
 		}
-		if group != "" && tokens[i].Group != group {
+		if group != "" {
+			if tokens[i].Group != group {
+				continue
+			}
+			pick = &tokens[i]
+			break
+		}
+		if tokens[i].Group == GroupAuto {
+			if autoPick == nil {
+				autoPick = &tokens[i]
+			}
 			continue
 		}
-		pick = &tokens[i]
-		break
+		if fallback == nil {
+			fallback = &tokens[i]
+		}
 	}
-	if pick == nil && group == "auto" {
+	if group == "" {
+		pick = autoPick
+		switch {
+		case pick == nil:
+			pick = fallback
+		case fallback != nil:
+			// Prefer the auto key only while the account may still USE that
+			// group. A tier that loses the grant keeps its enabled auto token,
+			// and TokenAuth exempts "auto" from the group gate — so the key
+			// authenticates, then expands to an empty pool list and every
+			// launch dies on a zero-model catalogue. Costs one request, and
+			// only when there is another key worth falling back to. An
+			// unanswerable probe keeps the auto key: this check exists to
+			// dodge a known-bad pick, not to invent a downgrade.
+			if usable, probeErr := client.autoGroupUsable(ctx); probeErr == nil && !usable {
+				pick = fallback
+			}
+		}
+	}
+	// autoPick/fallback are only assigned on the group == "" arm above, and are
+	// deliberately not consulted past this point: the auto-create branch below
+	// reassigns `tokens`, which would leave either pointer aimed at a stale
+	// backing array.
+	if pick == nil && group == GroupAuto {
 		if err := client.CreateToken(ctx, TokenCreate{
 			Name:            "Auto",
 			ExpiredTime:     TokenExpiresNever,
 			UnlimitedQuota:  true,
-			Group:           "auto",
+			Group:           GroupAuto,
 			CrossGroupRetry: true,
 		}); err != nil {
 			return "", fmt.Errorf("create auto relay API key: %w", err)
@@ -110,7 +162,7 @@ func ResolveRelayKey(ctx context.Context, creds *config.Credentials, group strin
 			return "", fmt.Errorf("look up created auto relay API key: %w", err)
 		}
 		for i := range tokens {
-			if tokens[i].Status == TokenStatusEnabled && tokens[i].Group == "auto" {
+			if tokens[i].Status == TokenStatusEnabled && tokens[i].Group == GroupAuto {
 				pick = &tokens[i]
 				break
 			}
@@ -168,7 +220,8 @@ func RefreshOAuthRelayKey(ctx context.Context, creds *config.Credentials) (strin
 
 // InvalidateCachedRelayKey clears the cached default-group relay key
 // (creds.RelayKey) and persists, so the next default-group
-// ResolveRelayKey re-picks the newest *enabled* token instead of
+// ResolveRelayKey re-resolves from scratch — the account's auto key, or its
+// newest enabled token when there is none — instead of
 // re-handing-out a key the gateway just rejected. Call it when a relay
 // request authenticated with the cached key comes back definitively
 // 401/unauthorized (the token was disabled, revoked, expired, or ran
@@ -240,8 +293,13 @@ func SelectAutoRelayKey(ctx context.Context, creds *config.Credentials) (bool, e
 	if err != nil {
 		return false, fmt.Errorf("look up auto relay API key: %w", err)
 	}
+	// Status is re-checked here even though ListEnabledTokens asks the gateway
+	// to filter: that filter is a query parameter an older gateway may ignore
+	// (see the pagination note on listTokens), and selecting a DISABLED auto
+	// token would persist a key that 401s on the very next launch. Matches the
+	// check ResolveRelayKey applies to the same list.
 	for _, token := range tokens {
-		if token.Group == "auto" {
+		if token.Status == TokenStatusEnabled && token.Group == GroupAuto {
 			return false, SelectRelayKey(ctx, creds, token.ID)
 		}
 	}
@@ -249,7 +307,7 @@ func SelectAutoRelayKey(ctx context.Context, creds *config.Credentials) (bool, e
 		Name:            "Auto",
 		ExpiredTime:     TokenExpiresNever,
 		UnlimitedQuota:  true,
-		Group:           "auto",
+		Group:           GroupAuto,
 		CrossGroupRetry: true,
 	}); err != nil {
 		return false, fmt.Errorf("create auto relay API key: %w", err)
@@ -259,7 +317,7 @@ func SelectAutoRelayKey(ctx context.Context, creds *config.Credentials) (bool, e
 		return true, fmt.Errorf("look up created auto relay API key: %w", err)
 	}
 	for _, token := range tokens {
-		if token.Group == "auto" {
+		if token.Status == TokenStatusEnabled && token.Group == GroupAuto {
 			return true, SelectRelayKey(ctx, creds, token.ID)
 		}
 	}

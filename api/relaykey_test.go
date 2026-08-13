@@ -257,6 +257,57 @@ func TestResolveRelayKey_GroupBypass(t *testing.T) {
 	}
 }
 
+func TestResolveRelayKey_CreatesMissingAutoGroupKey(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	var created atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/token/":
+			items := []map[string]interface{}{{"id": 7, "name": "Default", "status": TokenStatusEnabled, "group": ""}}
+			if created.Load() {
+				items = append([]map[string]interface{}{{"id": 33, "name": "Auto", "status": TokenStatusEnabled, "group": "auto"}}, items...)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "data": map[string]interface{}{"items": items},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/token/":
+			var req TokenCreate
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Errorf("decode create request: %v", err)
+			}
+			if req.Name != "Auto" || req.Group != "auto" || !req.UnlimitedQuota || req.ExpiredTime != TokenExpiresNever || !req.CrossGroupRetry {
+				t.Errorf("auto create request = %+v", req)
+			}
+			created.Store(true)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/token/33/key":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "data": map[string]interface{}{"key": "sk-everyapi-auto-33"},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	creds := &config.Credentials{
+		APIBase:     srv.URL,
+		AccessToken: "tok",
+		UserID:      1,
+		RelayKey:    "sk-everyapi-prior-cache",
+	}
+
+	got, err := ResolveRelayKey(context.Background(), creds, "auto")
+	if err != nil {
+		t.Fatalf("ResolveRelayKey: %v", err)
+	}
+	if got != "sk-everyapi-auto-33" || !created.Load() {
+		t.Fatalf("created auto key = %q, created=%v", got, created.Load())
+	}
+	if creds.RelayKey != "sk-everyapi-prior-cache" {
+		t.Fatalf("auto group override leaked into default cache: %q", creds.RelayKey)
+	}
+}
+
 func TestResolveRelayKey_NoEnabledKey(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	srv := tokenListAndKeyServer(t, []map[string]interface{}{}, nil)

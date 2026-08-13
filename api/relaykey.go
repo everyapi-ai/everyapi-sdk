@@ -95,6 +95,27 @@ func ResolveRelayKey(ctx context.Context, creds *config.Credentials, group strin
 		pick = &tokens[i]
 		break
 	}
+	if pick == nil && group == "auto" {
+		if err := client.CreateToken(ctx, TokenCreate{
+			Name:            "Auto",
+			ExpiredTime:     TokenExpiresNever,
+			UnlimitedQuota:  true,
+			Group:           "auto",
+			CrossGroupRetry: true,
+		}); err != nil {
+			return "", fmt.Errorf("create auto relay API key: %w", err)
+		}
+		tokens, err = client.ListEnabledTokens(ctx)
+		if err != nil {
+			return "", fmt.Errorf("look up created auto relay API key: %w", err)
+		}
+		for i := range tokens {
+			if tokens[i].Status == TokenStatusEnabled && tokens[i].Group == "auto" {
+				pick = &tokens[i]
+				break
+			}
+		}
+	}
 	if pick == nil {
 		if group != "" {
 			return "", ErrNoRelayKeyForGroup

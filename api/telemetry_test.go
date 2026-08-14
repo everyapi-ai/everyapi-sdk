@@ -110,14 +110,14 @@ func TestUserQuotaDates(t *testing.T) {
 			t.Errorf("path = %q", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"success":true,"data":[{"id":1,"model_name":"gpt-4o","quota":500,"count":2,"token_used":100,"created_at":1700000000}]}`))
+		w.Write([]byte(`{"success":true,"data":[{"id":1,"model_name":"gpt-4o","quota":500,"count":2,"token_used":100,"prompt_tokens":70,"cache_tokens":20,"cache_write_tokens":10,"created_at":1700000000}]}`))
 	}))
 	defer srv.Close()
 	rows, err := New(srv.URL, "acc").WithUserID(7).UserQuotaDates(context.Background(), 0, 0)
 	if err != nil {
 		t.Fatalf("UserQuotaDates: %v", err)
 	}
-	if len(rows) != 1 || rows[0].Quota != 500 || rows[0].TokenUsed != 100 {
+	if len(rows) != 1 || rows[0].Quota != 500 || rows[0].TokenUsed != 100 || rows[0].CacheTokens != 20 || rows[0].CacheWriteTokens != 10 {
 		t.Errorf("got %+v", rows)
 	}
 }

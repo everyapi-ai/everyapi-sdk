@@ -56,14 +56,17 @@ type ModelQuotaSummary struct {
 // model, day) returned by GetUserQuotaDates. The CLI usage command
 // renders these as a day-by-day spend timeline.
 type QuotaDay struct {
-	ID        int    `json:"id"`
-	UserID    int    `json:"user_id"`
-	Username  string `json:"username"`
-	ModelName string `json:"model_name"`
-	CreatedAt int64  `json:"created_at"`
-	TokenUsed int    `json:"token_used"`
-	Count     int    `json:"count"`
-	Quota     int    `json:"quota"`
+	ID               int    `json:"id"`
+	UserID           int    `json:"user_id"`
+	Username         string `json:"username"`
+	ModelName        string `json:"model_name"`
+	CreatedAt        int64  `json:"created_at"`
+	TokenUsed        int    `json:"token_used"`
+	PromptTokens     int    `json:"prompt_tokens"`
+	CacheTokens      int    `json:"cache_tokens"`
+	CacheWriteTokens int    `json:"cache_write_tokens"`
+	Count            int    `json:"count"`
+	Quota            int    `json:"quota"`
 }
 
 // PricingRow is the buyer-visible subset of model.Pricing. Hides

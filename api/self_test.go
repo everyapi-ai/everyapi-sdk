@@ -162,7 +162,7 @@ func TestRelayModelCatalog(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"success":true,"object":"list","data":[` +
-			`{"id":"glm-5.1","owned_by":"zhipu_4v","supported_endpoint_types":["anthropic","openai"]},` +
+			`{"id":"glm-5.1","owned_by":"zhipu_4v","supported_endpoint_types":["anthropic","openai"],"context_window":131072,"max_output":16384},` +
 			`{"id":""},` +
 			`{"id":"image-01","owned_by":"minimax","supported_endpoint_types":["image-generation"]}]}`))
 	}))
@@ -179,6 +179,9 @@ func TestRelayModelCatalog(t *testing.T) {
 	}
 	if len(got[0].SupportedEndpointTypes) != 2 || got[0].SupportedEndpointTypes[0] != "anthropic" {
 		t.Errorf("model[0] endpoints = %v, want [anthropic openai]", got[0].SupportedEndpointTypes)
+	}
+	if got[0].ContextWindow != 131072 || got[0].MaxOutput != 16384 {
+		t.Errorf("model[0] token limits = %d/%d, want 131072/16384", got[0].ContextWindow, got[0].MaxOutput)
 	}
 	if got[1].ID != "image-01" || got[1].OwnedBy != "minimax" {
 		t.Errorf("model[1] = %+v, want id=image-01 owned_by=minimax", got[1])

@@ -105,6 +105,7 @@ type RelayModel struct {
 	ID                     string
 	OwnedBy                string
 	SupportedEndpointTypes []string
+	ChatCompletionsBridge  bool
 	ContextWindow          int
 	MaxOutput              int
 }
@@ -124,6 +125,7 @@ func (c *Client) RelayModelCatalog(ctx context.Context) ([]RelayModel, error) {
 			ID                     string   `json:"id"`
 			OwnedBy                string   `json:"owned_by"`
 			SupportedEndpointTypes []string `json:"supported_endpoint_types"`
+			ChatCompletionsBridge  bool     `json:"chat_completions_bridge"`
 			ContextWindow          int      `json:"context_window"`
 			MaxOutput              int      `json:"max_output"`
 		} `json:"data"`
@@ -138,6 +140,7 @@ func (c *Client) RelayModelCatalog(ctx context.Context) ([]RelayModel, error) {
 				ID:                     m.ID,
 				OwnedBy:                m.OwnedBy,
 				SupportedEndpointTypes: m.SupportedEndpointTypes,
+				ChatCompletionsBridge:  m.ChatCompletionsBridge,
 				ContextWindow:          m.ContextWindow,
 				MaxOutput:              m.MaxOutput,
 			})

@@ -27,9 +27,7 @@ func TestLogFilterQuery(t *testing.T) {
 				t.Errorf("got %q, want empty", got)
 			}
 			if c.want != "" {
-				// query() returns ?a=b&c=d in url.Values order
-				// (alphabetical by key). Use substring matching to
-				// avoid pinning the exact order in test fixtures.
+				// query() returns ?a=b&c=d in url.Values order (alphabetical by key). Use substring matching to avoid pinning the exact order in test fixtures.
 				for _, frag := range strings.Split(c.want, "&") {
 					if !strings.Contains(got, frag) {
 						t.Errorf("got %q, missing fragment %q", got, frag)
@@ -177,9 +175,7 @@ func TestUserGroupsRejectsLegacyDescriptionShape(t *testing.T) {
 	}
 }
 
-// The two accessors differ only by mount, and the mount is the whole point:
-// /api/user/groups sits outside UserAuth and answers for the anonymous tier,
-// so anything asking what THIS account may do has to hit the self route.
+// The two accessors differ only by mount, and the mount is the whole point: /api/user/groups sits outside UserAuth and answers for the anonymous tier, so anything asking what THIS account may do has to hit the self route.
 func TestUserGroupsAndSelfGroupsUseTheirOwnMounts(t *testing.T) {
 	var paths []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -205,8 +201,7 @@ func TestUserGroupsAndSelfGroupsUseTheirOwnMounts(t *testing.T) {
 func TestGetPricing(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		// /api/pricing returns flat fields (no success envelope) —
-		// the SDK decodes the response straight into Pricing.
+		// /api/pricing returns flat fields (no success envelope) — the SDK decodes the response straight into Pricing.
 		w.Write([]byte(`{"data":[{"model_name":"gpt-4o","quota_type":0,"model_ratio":2.5,"completion_ratio":3,"owner_by":"openai"}],"group_ratio":{"grp_M3K-NEhOUc":1.0,"grp_Byteplus01":0.8},"usable_group":{"grp_M3K-NEhOUc":"standard","grp_Byteplus01":"BytePlus"}}`))
 	}))
 	defer srv.Close()

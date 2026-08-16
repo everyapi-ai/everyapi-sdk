@@ -75,8 +75,7 @@ func TestRefreshChannelCredential(t *testing.T) {
 		if res.ChannelID != 9 || res.Email != "u@x.com" {
 			t.Errorf("got %+v", res)
 		}
-		// Backend returns RFC3339 strings, not Unix ints — decoding them must
-		// not error (the bug) and the values must round-trip.
+		// Backend returns RFC3339 strings, not Unix ints — decoding them must not error (the bug) and the values must round-trip.
 		if res.ExpiresAt != "2024-12-31T23:59:59Z" || res.LastRefresh != "2024-12-31T22:00:00Z" {
 			t.Errorf("RFC3339 timestamps not decoded: %+v", res)
 		}

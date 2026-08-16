@@ -8,59 +8,32 @@ import (
 	"path/filepath"
 )
 
-// Settings is the on-disk user-preference payload, stored beside
-// credentials.json (same ConfigDir). Independent file because
-// preferences should survive `everyapi logout` — the credentials
-// file is rewritten / deleted on login flows but settings outlive
-// that.
+// Settings is the on-disk user-preference payload, stored beside credentials.json (same ConfigDir). Independent file because preferences should survive `everyapi logout` — the credentials file is rewritten / deleted on login flows but settings outlive that.
 //
-// Mode 0644 (not 0600 like credentials) because nothing in here
-// is a secret — having it world-readable just means another user
-// on the same machine can see that you prefer Chinese. The file
-// is per-user already via ConfigDir, so 0644 is plenty.
+// Mode 0644 (not 0600 like credentials) because nothing in here is a secret — having it world-readable just means another user on the same machine can see that you prefer Chinese. The file is per-user already via ConfigDir, so 0644 is plenty.
 type Settings struct {
-	// Language is an IETF tag the CLI sends as Accept-Language on
-	// API calls so backend errors come back in the user's
-	// language. Backend currently understands "en" and "zh" (prefix
-	// match — zh-CN / zh-TW both route to zh). Empty = autodetect
-	// at runtime from $LANG / $LC_ALL.
+	// Language is an IETF tag the CLI sends as Accept-Language on API calls so backend errors come back in the user's language. Backend currently understands "en" and "zh" (prefix match — zh-CN / zh-TW both route to zh). Empty = autodetect at runtime from $LANG / $LC_ALL.
 	Language string `json:"language,omitempty"`
 
-	// MenuLayout controls how the bare-`everyapi` launcher renders its
-	// command list. "grouped" (default, empty) shows every command on
-	// one screen under category headers; "nested" shows a category
-	// picker first, then the commands inside the chosen category.
-	// Unknown values fall back to grouped.
+	// MenuLayout controls how the bare-`everyapi` launcher renders its command list. "grouped" (default, empty) shows every command on one screen under category headers; "nested" shows a category picker first, then the commands inside the chosen category. Unknown values fall back to grouped.
 	MenuLayout string `json:"menu_layout,omitempty"`
 
-	// GatewayRegion selects the official gateway when no explicit API base is
-	// supplied. Empty/global = api.everyapi.ai, cn = api-cn.everyapi.ai.
+	// GatewayRegion selects the official gateway when no explicit API base is supplied. Empty/global = api.everyapi.ai, cn = api-cn.everyapi.ai.
 	GatewayRegion string `json:"gateway_region,omitempty"`
 
-	// CodexHookTrustBypass controls whether `everyapi use codex` adds
-	// --dangerously-bypass-hook-trust. Nil means the user has not chosen yet.
+	// CodexHookTrustBypass controls whether `everyapi use codex` adds --dangerously-bypass-hook-trust. Nil means the user has not chosen yet.
 	CodexHookTrustBypass *bool `json:"codex_hook_trust_bypass,omitempty"`
 
-	// DangerousMode controls the target tool's "skip all confirmations" mode.
-	// Nil means the user has not chosen yet.
+	// DangerousMode controls the target tool's "skip all confirmations" mode. Nil means the user has not chosen yet.
 	DangerousMode *bool `json:"dangerous_mode,omitempty"`
 
-	// ToolModels remembers the model each tool was last launched with,
-	// keyed by tool name ("claude", "codex", …). Absent or missing entry
-	// means the user has not chosen for that tool yet, which is what
-	// makes the first launch prompt and later ones not.
+	// ToolModels remembers the model each tool was last launched with, keyed by tool name ("claude", "codex", …). Absent or missing entry means the user has not chosen for that tool yet, which is what makes the first launch prompt and later ones not.
 	//
-	// Kept here rather than in each client's own config because the
-	// clients that need it most cannot hold it themselves: `everyapi use`
-	// hands codex a process-scoped CODEX_HOME that is deleted on exit, so
-	// anything codex writes about its own model is gone by the next
-	// launch. omitempty so a settings file written before this field
-	// round-trips unchanged.
+	// Kept here rather than in each client's own config because the clients that need it most cannot hold it themselves: `everyapi use` hands codex a process-scoped CODEX_HOME that is deleted on exit, so anything codex writes about its own model is gone by the next launch. omitempty so a settings file written before this field round-trips unchanged.
 	ToolModels map[string]string `json:"tool_models,omitempty"`
 }
 
-// ToolModel returns the remembered model for a tool, or "" when the user
-// has not chosen one yet.
+// ToolModel returns the remembered model for a tool, or "" when the user has not chosen one yet.
 func (s *Settings) ToolModel(tool string) string {
 	if s == nil {
 		return ""
@@ -68,9 +41,7 @@ func (s *Settings) ToolModel(tool string) string {
 	return s.ToolModels[tool]
 }
 
-// SetToolModel records the model a tool should boot with. An empty model
-// clears the entry, so a caller that fails to resolve a selection does not
-// pin the tool to a stale one.
+// SetToolModel records the model a tool should boot with. An empty model clears the entry, so a caller that fails to resolve a selection does not pin the tool to a stale one.
 func (s *Settings) SetToolModel(tool, model string) {
 	if model == "" {
 		delete(s.ToolModels, tool)
@@ -82,9 +53,7 @@ func (s *Settings) SetToolModel(tool, model string) {
 	s.ToolModels[tool] = model
 }
 
-// settingsPath is the on-disk path. Same dir as credentialsPath
-// (ConfigDir) but a distinct filename so logout doesn't wipe
-// preferences.
+// settingsPath is the on-disk path. Same dir as credentialsPath (ConfigDir) but a distinct filename so logout doesn't wipe preferences.
 func settingsPath() (string, error) {
 	dir, err := ConfigDir()
 	if err != nil {
@@ -93,10 +62,7 @@ func settingsPath() (string, error) {
 	return filepath.Join(dir, "settings.json"), nil
 }
 
-// LoadSettings reads the settings file. Missing file is NOT an
-// error — returns an empty Settings (every field zero). The CLI
-// builds the empty case as "no preferences set" rather than "you
-// need to run a setup command".
+// LoadSettings reads the settings file. Missing file is NOT an error — returns an empty Settings (every field zero). The CLI builds the empty case as "no preferences set" rather than "you need to run a setup command".
 func LoadSettings() (*Settings, error) {
 	path, err := settingsPath()
 	if err != nil {
@@ -116,8 +82,7 @@ func LoadSettings() (*Settings, error) {
 	return &s, nil
 }
 
-// SaveSettings writes the settings file atomically (tmp + rename)
-// at mode 0644.
+// SaveSettings writes the settings file atomically (tmp + rename) at mode 0644.
 func SaveSettings(s *Settings) error {
 	dir, err := ConfigDir()
 	if err != nil {
@@ -131,9 +96,7 @@ func SaveSettings(s *Settings) error {
 	if err != nil {
 		return fmt.Errorf("marshal settings: %w", err)
 	}
-	// Unique temp name (not a fixed "settings.json.tmp") so concurrent
-	// everyapi processes can't share one temp file and rename a half-written
-	// one over the real settings; remove the temp on any error path.
+	// Unique temp name (not a fixed "settings.json.tmp") so concurrent everyapi processes can't share one temp file and rename a half-written one over the real settings; remove the temp on any error path.
 	f, err := os.CreateTemp(dir, "settings.json.tmp-*")
 	if err != nil {
 		return fmt.Errorf("create temp settings: %w", err)
@@ -160,9 +123,7 @@ func SaveSettings(s *Settings) error {
 	return nil
 }
 
-// SettingsPath exposes the settings file path for callers that
-// want to surface "your settings live at X" — `everyapi settings
-// list` prints it.
+// SettingsPath exposes the settings file path for callers that want to surface "your settings live at X" — `everyapi settings list` prints it.
 func SettingsPath() (string, error) {
 	return settingsPath()
 }

@@ -15,9 +15,7 @@ import (
 	"github.com/everyapi-ai/everyapi-sdk/config"
 )
 
-// tokenListAndKeyServer is a small fake backend that serves
-// /api/token/ (list) and /api/token/{id}/key (key fetch) with
-// caller-supplied items + keys. Saves test boilerplate.
+// tokenListAndKeyServer is a small fake backend that serves /api/token/ (list) and /api/token/{id}/key (key fetch) with caller-supplied items + keys. Saves test boilerplate.
 func tokenListAndKeyServer(t *testing.T, items []map[string]interface{}, keys map[int]string) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -115,9 +113,7 @@ func TestResolveRelayKey_DefaultGroupSaveBack(t *testing.T) {
 	}
 }
 
-// The default group must land on the account's auto key even when a
-// group-scoped token was created later and heads the list — that token relays
-// only its own group's models, so taking the head narrowed every launch.
+// The default group must land on the account's auto key even when a group-scoped token was created later and heads the list — that token relays only its own group's models, so taking the head narrowed every launch.
 func TestResolveRelayKey_DefaultGroupPrefersAutoToken(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	srv := tokenListAndKeyServer(t,
@@ -140,14 +136,10 @@ func TestResolveRelayKey_DefaultGroupPrefersAutoToken(t *testing.T) {
 	}
 }
 
-// An account whose tier lost the auto grant keeps its enabled auto token, and
-// TokenAuth lets that key authenticate — it just expands to no pools, so every
-// launch sees an empty catalogue. Fall back to a key that still routes.
+// An account whose tier lost the auto grant keeps its enabled auto token, and TokenAuth lets that key authenticate — it just expands to no pools, so every launch sees an empty catalogue. Fall back to a key that still routes.
 func TestResolveRelayKey_DefaultGroupSkipsUnusableAutoToken(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	// Bound to a plain `want` rather than a name ending in Key: the secret
-	// scanner flags a high-entropy literal assigned to anything that reads like
-	// a credential, and a fake value in a test is not worth an ignore entry.
+	// Bound to a plain `want` rather than a name ending in Key: the secret scanner flags a high-entropy literal assigned to anything that reads like a credential, and a fake value in a test is not worth an ignore entry.
 	const want = "sk-everyapi-scoped-70"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -187,8 +179,7 @@ func TestResolveRelayKey_DefaultGroupSkipsUnusableAutoToken(t *testing.T) {
 	}
 }
 
-// The grant probe is a courtesy, not a gate: when it cannot be answered the
-// resolver keeps preferring the auto key rather than inventing a downgrade.
+// The grant probe is a courtesy, not a gate: when it cannot be answered the resolver keeps preferring the auto key rather than inventing a downgrade.
 func TestResolveRelayKey_DefaultGroupKeepsAutoWhenGrantProbeFails(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	const want = "sk-everyapi-auto-81"
@@ -225,8 +216,7 @@ func TestResolveRelayKey_DefaultGroupKeepsAutoWhenGrantProbeFails(t *testing.T) 
 	}
 }
 
-// One account, one key: with nothing to fall back to there is no decision to
-// make, so the resolver must not spend a request asking about the grant.
+// One account, one key: with nothing to fall back to there is no decision to make, so the resolver must not spend a request asking about the grant.
 func TestResolveRelayKey_DefaultGroupSkipsGrantProbeWithoutAlternative(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	const want = "sk-everyapi-auto-91"
@@ -264,8 +254,7 @@ func TestResolveRelayKey_DefaultGroupSkipsGrantProbeWithoutAlternative(t *testin
 	}
 }
 
-// A disabled auto key is not a key: the resolver falls back to an enabled
-// token rather than failing or handing back something the gateway rejects.
+// A disabled auto key is not a key: the resolver falls back to an enabled token rather than failing or handing back something the gateway rejects.
 func TestResolveRelayKey_DefaultGroupFallsBackWhenAutoDisabled(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	srv := tokenListAndKeyServer(t,
@@ -285,8 +274,7 @@ func TestResolveRelayKey_DefaultGroupFallsBackWhenAutoDisabled(t *testing.T) {
 	}
 }
 
-// An explicit --group still pins that group even when an auto key exists, and
-// the per-run override is never written into the default-group cache.
+// An explicit --group still pins that group even when an auto key exists, and the per-run override is never written into the default-group cache.
 func TestResolveRelayKey_ExplicitGroupIgnoresAutoToken(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	srv := tokenListAndKeyServer(t,
@@ -431,8 +419,7 @@ func TestResolveRelayKey_GroupBypass(t *testing.T) {
 			9: "sk-everyapi-prod-key",
 		},
 	)
-	// Pre-cache the default-group key; the group="prod" lookup must
-	// NOT see it, NOT save back the prod key on top of it.
+	// Pre-cache the default-group key; the group="prod" lookup must NOT see it, NOT save back the prod key on top of it.
 	creds := &config.Credentials{
 		APIBase:     srv.URL,
 		AccessToken: "tok",
@@ -530,8 +517,7 @@ func TestResolveRelayKey_NoKeyInGroup(t *testing.T) {
 }
 
 func TestResolveRelayKey_ErrCacheSaveCarriesKey(t *testing.T) {
-	// Point XDG_CONFIG_HOME at a path that can't be written:
-	// pre-create a regular FILE where the resolver expects a dir.
+	// Point XDG_CONFIG_HOME at a path that can't be written: pre-create a regular FILE where the resolver expects a dir.
 	tmp := t.TempDir()
 	blocker := filepath.Join(tmp, "everyapi")
 	if err := os.WriteFile(blocker, []byte("not a dir"), 0o600); err != nil {
@@ -580,11 +566,7 @@ func TestResolveRelayKey_SkipDisabledTokens(t *testing.T) {
 	}
 }
 
-// oauth2RefreshServer is a fake gateway that answers the OAuth2 refresh
-// endpoint (/api/oauth2/token, grant_type=refresh_token). It counts hits
-// in *calls and delegates the reply to handler so each test can assert
-// the posted form and shape the response. Any other path 404s loudly so
-// a stray management call (e.g. an unexpected ListTokens) is visible.
+// oauth2RefreshServer is a fake gateway that answers the OAuth2 refresh endpoint (/api/oauth2/token, grant_type=refresh_token). It counts hits in *calls and delegates the reply to handler so each test can assert the posted form and shape the response. Any other path 404s loudly so a stray management call (e.g. an unexpected ListTokens) is visible.
 func oauth2RefreshServer(t *testing.T, calls *int32, handler http.HandlerFunc) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -600,10 +582,7 @@ func oauth2RefreshServer(t *testing.T, calls *int32, handler http.HandlerFunc) *
 	return srv
 }
 
-// TestResolveRelayKey_OAuth2_OutsideSkew_NoRefresh: an OAuth2 relay key
-// whose expiry is comfortably beyond relayKeyRefreshSkew (24h) must be
-// served from cache WITHOUT touching the refresh endpoint — the proactive
-// refresh only fires inside the skew window.
+// TestResolveRelayKey_OAuth2_OutsideSkew_NoRefresh: an OAuth2 relay key whose expiry is comfortably beyond relayKeyRefreshSkew (24h) must be served from cache WITHOUT touching the refresh endpoint — the proactive refresh only fires inside the skew window.
 func TestResolveRelayKey_OAuth2_OutsideSkew_NoRefresh(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	var calls int32
@@ -663,16 +642,12 @@ func TestRefreshOAuthRelayKey_ForcesRefreshOutsideSkew(t *testing.T) {
 	}
 }
 
-// TestResolveRelayKey_OAuth2_InsideSkew_RefreshPersists: an OAuth2 relay
-// key inside the 24h skew window is proactively refreshed; the rotated
-// key + refresh token + expiry are written back to creds AND persisted to
-// disk so the next process picks up the fresh material.
+// TestResolveRelayKey_OAuth2_InsideSkew_RefreshPersists: an OAuth2 relay key inside the 24h skew window is proactively refreshed; the rotated key + refresh token + expiry are written back to creds AND persisted to disk so the next process picks up the fresh material.
 func TestResolveRelayKey_OAuth2_InsideSkew_RefreshPersists(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	var calls int32
 	srv := oauth2RefreshServer(t, &calls, func(w http.ResponseWriter, r *http.Request) {
-		// The resolver must POST the stored refresh material so the
-		// gateway can mint a new key.
+		// The resolver must POST the stored refresh material so the gateway can mint a new key.
 		if err := r.ParseForm(); err != nil {
 			t.Fatalf("ParseForm: %v", err)
 		}
@@ -688,9 +663,7 @@ func TestResolveRelayKey_OAuth2_InsideSkew_RefreshPersists(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"access_token":  "sk-everyapi-rotated",
 			"refresh_token": "rt-new",
-			// 48h → absolute deadline now+48h, comfortably past the
-			// original now+23h, so the refresh demonstrably extends the
-			// key's lifetime out of the skew window.
+			// 48h → absolute deadline now+48h, comfortably past the original now+23h, so the refresh demonstrably extends the key's lifetime out of the skew window.
 			"expires_in": 172800,
 		})
 	})
@@ -715,8 +688,7 @@ func TestResolveRelayKey_OAuth2_InsideSkew_RefreshPersists(t *testing.T) {
 	if n := atomic.LoadInt32(&calls); n != 1 {
 		t.Errorf("refresh calls = %d, want exactly 1", n)
 	}
-	// creds mutated in place: relay key + access token kept in sync, and
-	// the refresh token rotated.
+	// creds mutated in place: relay key + access token kept in sync, and the refresh token rotated.
 	if creds.RelayKey != "sk-everyapi-rotated" || creds.AccessToken != "sk-everyapi-rotated" {
 		t.Errorf("creds not synced after refresh: relay=%q access=%q", creds.RelayKey, creds.AccessToken)
 	}
@@ -736,11 +708,7 @@ func TestResolveRelayKey_OAuth2_InsideSkew_RefreshPersists(t *testing.T) {
 	}
 }
 
-// TestResolveRelayKey_OAuth2_RefreshFails_FallsBackToCached: when the
-// refresh endpoint rejects the token (revoked / invalid_grant), the
-// resolver must NOT error — it falls back to the still-cached key and
-// leaves the creds untouched, so the next live API call drives the
-// re-login instead of crashing the current command.
+// TestResolveRelayKey_OAuth2_RefreshFails_FallsBackToCached: when the refresh endpoint rejects the token (revoked / invalid_grant), the resolver must NOT error — it falls back to the still-cached key and leaves the creds untouched, so the next live API call drives the re-login instead of crashing the current command.
 func TestResolveRelayKey_OAuth2_RefreshFails_FallsBackToCached(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	var calls int32

@@ -5,11 +5,7 @@ import (
 	"testing"
 )
 
-// TestMain points XDG_CONFIG_HOME at a throwaway directory for the whole
-// package test run so the per-install key (installkey.go) and any config
-// I/O land in a temp dir instead of the developer's real ~/.config.
-// Individual tests that need their own config dir still override this via
-// t.Setenv, which restores the value set here afterwards.
+// TestMain points XDG_CONFIG_HOME at a throwaway directory for the whole package test run so the per-install key (installkey.go) and any config I/O land in a temp dir instead of the developer's real ~/.config. Individual tests that need their own config dir still override this via t.Setenv, which restores the value set here afterwards.
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "everyapi-sanitizer-test-*")
 	if err != nil {

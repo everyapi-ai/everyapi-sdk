@@ -236,9 +236,7 @@ func TestServerTunnelsThroughParentProxyForUnregisteredHost(t *testing.T) {
 	defer destination.Close()
 	destinationURL, _ := url.Parse(destination.URL)
 
-	// A minimal CONNECT proxy: accept the tunnel, record which authority the
-	// connector asked for and whether it forwarded Proxy-Authorization, then
-	// splice raw bytes to the real destination.
+	// A minimal CONNECT proxy: accept the tunnel, record which authority the connector asked for and whether it forwarded Proxy-Authorization, then splice raw bytes to the real destination.
 	var (
 		mu             sync.Mutex
 		sawConnectHost string
@@ -300,8 +298,7 @@ func TestServerTunnelsThroughParentProxyForUnregisteredHost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	// Inject the parent proxy instead of touching process-wide env, which
-	// http.ProxyFromEnvironment caches in a sync.Once.
+	// Inject the parent proxy instead of touching process-wide env, which http.ProxyFromEnvironment caches in a sync.Once.
 	server.proxyForRequest = func(*http.Request) (*url.URL, error) { return proxyURLParsed, nil }
 	proxyURL, _, stop := serveTestConnector(t, server)
 	defer stop()
@@ -333,11 +330,7 @@ func TestServerTunnelsThroughParentProxyForUnregisteredHost(t *testing.T) {
 	}
 }
 
-// TestDialViaHTTPProxyTimesOutOnStalledProxy pins the setup bound: a proxy that
-// accepts the TCP connection and then goes silent must fail the tunnel, not
-// wedge the handler goroutine forever. net.Dialer.Timeout does not cover this —
-// it bounds only the TCP connect — so before the setup deadline this blocked
-// indefinitely in http.ReadResponse.
+// TestDialViaHTTPProxyTimesOutOnStalledProxy pins the setup bound: a proxy that accepts the TCP connection and then goes silent must fail the tunnel, not wedge the handler goroutine forever. net.Dialer.Timeout does not cover this — it bounds only the TCP connect — so before the setup deadline this blocked indefinitely in http.ReadResponse.
 func TestDialViaHTTPProxyTimesOutOnStalledProxy(t *testing.T) {
 	t.Parallel()
 
@@ -387,10 +380,7 @@ func TestDialViaHTTPProxyTimesOutOnStalledProxy(t *testing.T) {
 	}
 }
 
-// TestDialViaHTTPProxyClearsSetupDeadlineOnReturnedTunnel guards the other half
-// of the setup bound: the returned conn is a long-lived tunnel (the child's own
-// TLS session, possibly a multi-minute SSE stream), so it must NOT inherit the
-// setup deadline — otherwise every proxied tunnel would die once it elapsed.
+// TestDialViaHTTPProxyClearsSetupDeadlineOnReturnedTunnel guards the other half of the setup bound: the returned conn is a long-lived tunnel (the child's own TLS session, possibly a multi-minute SSE stream), so it must NOT inherit the setup deadline — otherwise every proxied tunnel would die once it elapsed.
 func TestDialViaHTTPProxyClearsSetupDeadlineOnReturnedTunnel(t *testing.T) {
 	t.Parallel()
 
@@ -406,8 +396,7 @@ func TestDialViaHTTPProxyClearsSetupDeadlineOnReturnedTunnel(t *testing.T) {
 				return
 			}
 			go func(c net.Conn) {
-				// Answer well after the (deliberately tiny) setup deadline, so a
-				// leaked deadline surfaces as a read failure below.
+				// Answer well after the (deliberately tiny) setup deadline, so a leaked deadline surfaces as a read failure below.
 				time.Sleep(300 * time.Millisecond)
 				_, _ = io.WriteString(c, "late")
 				_ = c.Close()
@@ -498,9 +487,7 @@ func TestDialTunnelFallsBackToDirectForSocksProxy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	// An unsupported (SOCKS) proxy scheme must not error — the connector
-	// falls back to the pre-proxy-support direct dial rather than newly
-	// breaking a user whose direct route works.
+	// An unsupported (SOCKS) proxy scheme must not error — the connector falls back to the pre-proxy-support direct dial rather than newly breaking a user whose direct route works.
 	server.proxyForRequest = func(*http.Request) (*url.URL, error) {
 		return &url.URL{Scheme: "socks5", Host: "127.0.0.1:1080"}, nil
 	}
@@ -824,24 +811,11 @@ func TestCertificateAuthorityIsEphemeralPublicAndPathConstrained(t *testing.T) {
 	if !cert.MaxPathLenZero || cert.MaxPathLen != 0 {
 		t.Fatalf("CA path constraint = MaxPathLenZero %v MaxPathLen %d, want explicit zero", cert.MaxPathLenZero, cert.MaxPathLen)
 	}
-	// This bound was 25h, encoding "ephemeral" as "short-lived". It has been
-	// relaxed to CertificateLifetime deliberately, because that reading cost
-	// more than it bought once transparent mode became the default: the child
-	// pins this CA at launch and never re-reads it, so a 24h CA hard-killed
-	// every session that ran overnight with an unrecoverable CERT_HAS_EXPIRED.
+	// This bound was 25h, encoding "ephemeral" as "short-lived". It has been relaxed to CertificateLifetime deliberately, because that reading cost more than it bought once transparent mode became the default: the child pins this CA at launch and never re-reads it, so a 24h CA hard-killed every session that ran overnight with an unrecoverable CERT_HAS_EXPIRED.
 	//
-	// What actually bounds the risk is not NotAfter but the private key's
-	// lifetime, and that is unchanged: the key is generated per-process, is
-	// never written to disk, is never returned by CACertificatePEM (asserted
-	// above), and dies with the session. A stolen ca-*.pem is a public
-	// certificate and cannot sign anything. So the window in which this CA can
-	// be abused is the process's lifetime either way — extending NotAfter does
-	// not widen it, it only stops the CA from expiring out from under a session
-	// that is still running.
+	// What actually bounds the risk is not NotAfter but the private key's lifetime, and that is unchanged: the key is generated per-process, is never written to disk, is never returned by CACertificatePEM (asserted above), and dies with the session. A stolen ca-*.pem is a public certificate and cannot sign anything. So the window in which this CA can be abused is the process's lifetime either way — extending NotAfter does not widen it, it only stops the CA from expiring out from under a session that is still running.
 	//
-	// The properties that carry the real weight — key never exported, IsCA with
-	// an explicit zero path constraint, single-cert PEM — are asserted above and
-	// stay untouched.
+	// The properties that carry the real weight — key never exported, IsCA with an explicit zero path constraint, single-cert PEM — are asserted above and stay untouched.
 	validity := cert.NotAfter.Sub(cert.NotBefore)
 	if validity > CertificateLifetime+time.Hour {
 		t.Fatalf("CA validity = %s, want at most CertificateLifetime (%s) plus slack", validity, CertificateLifetime)
@@ -866,17 +840,11 @@ func TestLeafCertificateIsLimitedToRequestedHost(t *testing.T) {
 	if len(leaf.DNSNames) != 1 || leaf.DNSNames[0] != "api.openai.com" {
 		t.Fatalf("leaf DNS SANs = %v", leaf.DNSNames)
 	}
-	// A leaf must never be a CA — that is the load-bearing constraint here and
-	// it is asserted on its own so a validity change can never silently relax
-	// it.
+	// A leaf must never be a CA — that is the load-bearing constraint here and it is asserted on its own so a validity change can never silently relax it.
 	if leaf.IsCA {
 		t.Fatalf("leaf is a CA: %v", leaf.IsCA)
 	}
-	// Validity tracks CertificateLifetime for the same reason the CA's does:
-	// leaves are cached for the process's lifetime with no expiry re-check, so
-	// a leaf shorter than its session breaks that session exactly as an expired
-	// CA would. See TestCertificateAuthorityIsEphemeralPublicAndPathConstrained
-	// for why bounding NotAfter is not what bounds the risk.
+	// Validity tracks CertificateLifetime for the same reason the CA's does: leaves are cached for the process's lifetime with no expiry re-check, so a leaf shorter than its session breaks that session exactly as an expired CA would. See TestCertificateAuthorityIsEphemeralPublicAndPathConstrained for why bounding NotAfter is not what bounds the risk.
 	if v := leaf.NotAfter.Sub(leaf.NotBefore); v > CertificateLifetime+time.Hour {
 		t.Fatalf("leaf validity = %s, want at most CertificateLifetime (%s) plus slack", v, CertificateLifetime)
 	}
@@ -996,17 +964,9 @@ func proxyClient(proxyURL string, roots *x509.CertPool) *http.Client {
 	}
 }
 
-// TestCertificateLifetimeOutlivesALongSession pins the bound that decides how
-// long a transparent session can run. The child pins the CA at launch and never
-// re-reads it, so the CA cannot be rotated mid-session; when it expires, every
-// new TLS connection fails with CERT_HAS_EXPIRED and the session cannot
-// self-heal. At the original 24h this killed any session left running overnight
-// — which, now that transparent mode is the default, is every user's default
-// fate rather than an opt-in tester's.
+// TestCertificateLifetimeOutlivesALongSession pins the bound that decides how long a transparent session can run. The child pins the CA at launch and never re-reads it, so the CA cannot be rotated mid-session; when it expires, every new TLS connection fails with CERT_HAS_EXPIRED and the session cannot self-heal. At the original 24h this killed any session left running overnight — which, now that transparent mode is the default, is every user's default fate rather than an opt-in tester's.
 //
-// Leaves are asserted alongside the CA because they are cached for the
-// process's lifetime with no expiry re-check: a leaf shorter than its CA would
-// reintroduce exactly the same death, one level down.
+// Leaves are asserted alongside the CA because they are cached for the process's lifetime with no expiry re-check: a leaf shorter than its CA would reintroduce exactly the same death, one level down.
 func TestCertificateLifetimeOutlivesALongSession(t *testing.T) {
 	t.Parallel()
 
@@ -1043,19 +1003,9 @@ func TestCertificateLifetimeOutlivesALongSession(t *testing.T) {
 	}
 }
 
-// TestTunnelProxyProbesWithHTTPSSchemeAndDestinationHost covers the production
-// resolver path that every other proxy test injects away. tunnelProxy's whole
-// job is to hand http.ProxyFromEnvironment a request shaped so the CONNECT
-// destination resolves against HTTPS_PROXY (the tunnel carries the client's
-// TLS) while NO_PROXY exclusions still apply to the real destination host — and
-// with server.proxyForRequest stubbed in the other tests, nothing verified the
-// probe was built that way. A probe with the wrong scheme would silently match
-// HTTP_PROXY instead; one with the wrong host would defeat NO_PROXY.
+// TestTunnelProxyProbesWithHTTPSSchemeAndDestinationHost covers the production resolver path that every other proxy test injects away. tunnelProxy's whole job is to hand http.ProxyFromEnvironment a request shaped so the CONNECT destination resolves against HTTPS_PROXY (the tunnel carries the client's TLS) while NO_PROXY exclusions still apply to the real destination host — and with server.proxyForRequest stubbed in the other tests, nothing verified the probe was built that way. A probe with the wrong scheme would silently match HTTP_PROXY instead; one with the wrong host would defeat NO_PROXY.
 //
-// The probe is captured rather than asserted through the real
-// ProxyFromEnvironment because that function caches the environment in a
-// process-wide sync.Once, so a t.Setenv here would race every parallel test.
-// Honoring NO_PROXY is then stdlib behavior, driven entirely by these two fields.
+// The probe is captured rather than asserted through the real ProxyFromEnvironment because that function caches the environment in a process-wide sync.Once, so a t.Setenv here would race every parallel test. Honoring NO_PROXY is then stdlib behavior, driven entirely by these two fields.
 func TestTunnelProxyProbesWithHTTPSSchemeAndDestinationHost(t *testing.T) {
 	t.Parallel()
 
@@ -1068,8 +1018,7 @@ func TestTunnelProxyProbesWithHTTPSSchemeAndDestinationHost(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	// New must wire the real resolver by default — the bug this guards is the
-	// production path never being reached at all.
+	// New must wire the real resolver by default — the bug this guards is the production path never being reached at all.
 	if server.proxyForRequest == nil {
 		t.Fatal("New left proxyForRequest nil; the production resolver would never run")
 	}

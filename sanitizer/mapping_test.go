@@ -78,10 +78,7 @@ func TestMapping_Reset(t *testing.T) {
 	}
 }
 
-// TestMapping_TokenStableAcrossInstallKey is P2 property (a): the same
-// secret maps to the SAME placeholder for any mapping sharing the install
-// key — so an identical secret keeps the upstream prompt-cache key stable
-// across processes / sub-agents.
+// TestMapping_TokenStableAcrossInstallKey is P2 property (a): the same secret maps to the SAME placeholder for any mapping sharing the install key — so an identical secret keeps the upstream prompt-cache key stable across processes / sub-agents.
 func TestMapping_TokenStableAcrossInstallKey(t *testing.T) {
 	key := randKey(t)
 	mA := newMappingWithKey(0, key)
@@ -95,10 +92,7 @@ func TestMapping_TokenStableAcrossInstallKey(t *testing.T) {
 	}
 }
 
-// TestMapping_ForeignTokenMisses is P2 property (b): a token minted by a
-// DIFFERENT install key is absent from this table, so Lookup misses and
-// the restorer will pass it through verbatim. This kills both the
-// cross-process wrong-secret restore and the enumeration oracle.
+// TestMapping_ForeignTokenMisses is P2 property (b): a token minted by a DIFFERENT install key is absent from this table, so Lookup misses and the restorer will pass it through verbatim. This kills both the cross-process wrong-secret restore and the enumeration oracle.
 func TestMapping_ForeignTokenMisses(t *testing.T) {
 	mA := newMappingWithKey(0, randKey(t))
 	pA := mA.PutOrGet("sk-AAAA-secret")
@@ -111,9 +105,7 @@ func TestMapping_ForeignTokenMisses(t *testing.T) {
 	}
 }
 
-// TestMapping_LRUKeepsHotEntry is the P7 repro: a repeatedly-referenced
-// secret must not be the eviction victim (FIFO-by-insertion would evict
-// the hottest entry first).
+// TestMapping_LRUKeepsHotEntry is the P7 repro: a repeatedly-referenced secret must not be the eviction victim (FIFO-by-insertion would evict the hottest entry first).
 func TestMapping_LRUKeepsHotEntry(t *testing.T) {
 	m := NewMappingWithCap(2)
 	hot := m.PutOrGet("HOT") // entry 1

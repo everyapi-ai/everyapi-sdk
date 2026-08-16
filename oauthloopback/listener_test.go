@@ -26,10 +26,7 @@ func TestListener_CapturesCodeAndState(t *testing.T) {
 	}
 
 	go func() {
-		// Give Listen a beat to start the goroutine — Serve runs in
-		// the background and may not have ServeHTTP'd before our
-		// client request lands. 50ms is more than enough on any
-		// reasonable machine and keeps the test fast.
+		// Give Listen a beat to start the goroutine — Serve runs in the background and may not have ServeHTTP'd before our client request lands. 50ms is more than enough on any reasonable machine and keeps the test fast.
 		time.Sleep(50 * time.Millisecond)
 		_, _ = http.Get(l.URL() + "?code=abc&state=xyz")
 	}()
@@ -99,13 +96,7 @@ func TestListener_CloseIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestListener_DuplicateCallbackAfterWait closes the gap caught in
-// the security re-review: relying on the buffered channel's
-// non-block-send `default` branch only suppresses duplicates while
-// the buffer is FULL. Once Wait() drains the result, the buffer
-// empties, and a second /callback could successfully re-push and
-// render the success page — exactly the spoofing scenario R7 was
-// meant to prevent. The sticky `delivered` flag closes that window.
+// TestListener_DuplicateCallbackAfterWait closes the gap caught in the security re-review: relying on the buffered channel's non-block-send `default` branch only suppresses duplicates while the buffer is FULL. Once Wait() drains the result, the buffer empties, and a second /callback could successfully re-push and render the success page — exactly the spoofing scenario R7 was meant to prevent. The sticky `delivered` flag closes that window.
 func TestListener_DuplicateCallbackAfterWait(t *testing.T) {
 	l, err := Listen()
 	if err != nil {
@@ -124,10 +115,7 @@ func TestListener_DuplicateCallbackAfterWait(t *testing.T) {
 		t.Errorf("first call status = %d, want 200", r1.StatusCode)
 	}
 
-	// Drain the channel — this is what runGeminiOAuth does in
-	// production right after the callback fires. Pre-fix, this
-	// emptied the buffer and re-enabled the duplicate-as-success
-	// path; post-fix, the sticky flag holds.
+	// Drain the channel — this is what runGeminiOAuth does in production right after the callback fires. Pre-fix, this emptied the buffer and re-enabled the duplicate-as-success path; post-fix, the sticky flag holds.
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if _, err := l.Wait(ctx); err != nil {
@@ -148,10 +136,7 @@ func TestListener_DuplicateCallbackAfterWait(t *testing.T) {
 	}
 }
 
-// TestListener_DuplicateCallback: a second /callback hit after the
-// first delivery must NOT show the success page (an attacker who
-// reached the loopback port mustn't be able to mimic a finished
-// flow). Returns 409 + the "already handled" template instead.
+// TestListener_DuplicateCallback: a second /callback hit after the first delivery must NOT show the success page (an attacker who reached the loopback port mustn't be able to mimic a finished flow). Returns 409 + the "already handled" template instead.
 func TestListener_DuplicateCallback(t *testing.T) {
 	l, err := Listen()
 	if err != nil {
@@ -184,8 +169,7 @@ func TestListener_DuplicateCallback(t *testing.T) {
 	}
 }
 
-// TestListener_OnlyServesCallback: a stray request to /anything-else
-// must 404, not crash. Defensive — keeps the surface tight.
+// TestListener_OnlyServesCallback: a stray request to /anything-else must 404, not crash. Defensive — keeps the surface tight.
 func TestListener_OnlyServesCallback(t *testing.T) {
 	l, err := Listen()
 	if err != nil {

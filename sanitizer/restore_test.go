@@ -7,16 +7,11 @@ import (
 	"testing"
 )
 
-// TestRestoreBuffered_EscapedBrackets is the confirmed escaped-bracket
-// defect for buffered (non-streaming) JSON: the gateway's default
-// json.Marshal HTML-escapes the placeholder brackets (`<` → `<`), so
-// a raw-byte regex on `<<…>>` never matches. Decoding the JSON first and
-// restoring on the DECODED string value sees the real brackets.
+// TestRestoreBuffered_EscapedBrackets is the confirmed escaped-bracket defect for buffered (non-streaming) JSON: the gateway's default json.Marshal HTML-escapes the placeholder brackets (`<` → `<`), so a raw-byte regex on `<<…>>` never matches. Decoding the JSON first and restoring on the DECODED string value sees the real brackets.
 func TestRestoreBuffered_EscapedBrackets(t *testing.T) {
 	m := NewMapping()
 	ph := m.PutOrGet("sk-ant-REALKEY-abcdefghijklmnop")
-	// json.Marshal escapes `<` as the 6-byte sequence <, exactly like
-	// the gateway does.
+	// json.Marshal escapes `<` as the 6-byte sequence <, exactly like the gateway does.
 	body, _ := json.Marshal(map[string]any{
 		"content": []any{map[string]any{"type": "text", "text": "the key is " + ph}},
 	})
@@ -32,9 +27,7 @@ func TestRestoreBuffered_EscapedBrackets(t *testing.T) {
 	}
 }
 
-// TestRestoreBuffered_PEMReEscape is the confirmed corruption defect: a
-// restored secret containing newlines/quotes/backslashes (a PEM key) must
-// be re-escaped so the JSON stays valid, not spliced in raw.
+// TestRestoreBuffered_PEMReEscape is the confirmed corruption defect: a restored secret containing newlines/quotes/backslashes (a PEM key) must be re-escaped so the JSON stays valid, not spliced in raw.
 func TestRestoreBuffered_PEMReEscape(t *testing.T) {
 	m := NewMapping()
 	secret := "-----BEGIN PRIVATE KEY-----\nMIIB\"VQ==\\x\n-----END PRIVATE KEY-----"
@@ -60,9 +53,7 @@ func TestRestoreBuffered_PEMReEscape(t *testing.T) {
 	}
 }
 
-// TestRestoreBuffered_NoPlaceholderByteIdentical: a clean body (no
-// resolvable placeholder) must come out byte-for-byte, with no JSON
-// re-normalisation.
+// TestRestoreBuffered_NoPlaceholderByteIdentical: a clean body (no resolvable placeholder) must come out byte-for-byte, with no JSON re-normalisation.
 func TestRestoreBuffered_NoPlaceholderByteIdentical(t *testing.T) {
 	m := NewMapping()
 	m.PutOrGet("sk-something") // mapping has entries, but body cites none
@@ -73,9 +64,7 @@ func TestRestoreBuffered_NoPlaceholderByteIdentical(t *testing.T) {
 	}
 }
 
-// TestRestoreBuffered_ToolArgNotRestored is P3: display text restores; a
-// placeholder inside a tool_use input / tool_call arguments sink is left
-// intact (the safe direction for an agent-executed argument).
+// TestRestoreBuffered_ToolArgNotRestored is P3: display text restores; a placeholder inside a tool_use input / tool_call arguments sink is left intact (the safe direction for an agent-executed argument).
 func TestRestoreBuffered_ToolArgNotRestored(t *testing.T) {
 	m := NewMapping()
 	ph := m.PutOrGet("sk-LIVE-secret-xxxxxxxxxxxx")
@@ -111,9 +100,7 @@ func TestRestoreBuffered_ToolArgNotRestored(t *testing.T) {
 	}
 }
 
-// TestRestore_OracleFabricatedTokenPassthrough is the P2 oracle kill: a
-// token the mapping never minted (an attacker can't forge a valid HMAC
-// without the install key) must pass through verbatim, not resolve.
+// TestRestore_OracleFabricatedTokenPassthrough is the P2 oracle kill: a token the mapping never minted (an attacker can't forge a valid HMAC without the install key) must pass through verbatim, not resolve.
 func TestRestore_OracleFabricatedTokenPassthrough(t *testing.T) {
 	m := NewMapping()
 	m.PutOrGet("REAL_AWS_KEY") // mapping holds a real secret

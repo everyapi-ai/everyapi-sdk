@@ -10,42 +10,25 @@ import (
 	"github.com/everyapi-ai/everyapi-sdk/config"
 )
 
-// FileConfig is the on-disk shape of ~/.config/everyapi/sanitizer.json.
-// JSON (not TOML as the spec text loosely mentions) is used here for
-// consistency with credentials.json — keeping the CLI zero-dependency
-// is worth more than the format flag waving. The file is mode 0600 so
-// the disabled-rules list and any custom regex patterns aren't
-// world-readable.
+// FileConfig is the on-disk shape of ~/.config/everyapi/sanitizer.json. JSON (not TOML as the spec text loosely mentions) is used here for consistency with credentials.json — keeping the CLI zero-dependency is worth more than the format flag waving. The file is mode 0600 so the disabled-rules list and any custom regex patterns aren't world-readable.
 //
 // Default behaviour when the file doesn't exist:
 //   - Every built-in detector is active
 //   - No custom patterns
 //
-// A user-config file therefore only needs to specify the *deviations*
-// from default: which detectors to disable, plus any custom patterns
-// to add.
+// A user-config file therefore only needs to specify the *deviations* from default: which detectors to disable, plus any custom patterns to add.
 type FileConfig struct {
-	// Disabled lists built-in detector names to switch off. Entries
-	// that don't match a known detector name are ignored at load
-	// time — the file is forward-compatible if a future binary
-	// drops a detector.
+	// Disabled lists built-in detector names to switch off. Entries that don't match a known detector name are ignored at load time — the file is forward-compatible if a future binary drops a detector.
 	Disabled []string `json:"disabled,omitempty"`
 
-	// CustomPatterns is the user-defined regex set. Each entry
-	// becomes a Detector with a `custom_<name>` registered name.
-	// Invalid regexes are dropped at load time (CompileUserPatterns
-	// already does the right thing).
+	// CustomPatterns is the user-defined regex set. Each entry becomes a Detector with a `custom_<name>` registered name. Invalid regexes are dropped at load time (CompileUserPatterns already does the right thing).
 	CustomPatterns []UserPattern `json:"custom_patterns,omitempty"`
 
-	// Enabled lists opt-in built-in detector names to switch ON. These
-	// (luhn_credit_card, chinese_id — see OptInDetectorNames) ship
-	// disabled by default because their checksum-only matching has a high
-	// false-positive rate; a user who genuinely wants them opts in here.
+	// Enabled lists opt-in built-in detector names to switch ON. These (luhn_credit_card, chinese_id — see OptInDetectorNames) ship disabled by default because their checksum-only matching has a high false-positive rate; a user who genuinely wants them opts in here.
 	Enabled []string `json:"enabled,omitempty"`
 }
 
-// ConfigPath resolves to ~/.config/everyapi/sanitizer.json. Returns the
-// error from the underlying config helper unchanged.
+// ConfigPath resolves to ~/.config/everyapi/sanitizer.json. Returns the error from the underlying config helper unchanged.
 func ConfigPath() (string, error) {
 	dir, err := config.ConfigDir()
 	if err != nil {
@@ -54,9 +37,7 @@ func ConfigPath() (string, error) {
 	return filepath.Join(dir, "sanitizer.json"), nil
 }
 
-// LoadFileConfig reads ConfigPath() if it exists. Missing file →
-// returns an empty FileConfig + nil error (use defaults). Other I/O
-// or parse errors bubble up.
+// LoadFileConfig reads ConfigPath() if it exists. Missing file → returns an empty FileConfig + nil error (use defaults). Other I/O or parse errors bubble up.
 func LoadFileConfig() (*FileConfig, error) {
 	path, err := ConfigPath()
 	if err != nil {
@@ -76,10 +57,7 @@ func LoadFileConfig() (*FileConfig, error) {
 	return &fc, nil
 }
 
-// SaveFileConfig writes fc to ConfigPath() with 0600 mode. Creates
-// the parent directory if needed. The write is atomic via a temp
-// file + rename so a partial write can't leave the user with a
-// half-truncated config.
+// SaveFileConfig writes fc to ConfigPath() with 0600 mode. Creates the parent directory if needed. The write is atomic via a temp file + rename so a partial write can't leave the user with a half-truncated config.
 func SaveFileConfig(fc *FileConfig) error {
 	path, err := ConfigPath()
 	if err != nil {
@@ -92,10 +70,7 @@ func SaveFileConfig(fc *FileConfig) error {
 	if err != nil {
 		return fmt.Errorf("marshal sanitizer config: %w", err)
 	}
-	// Unique temp name (not a fixed "sanitizer.json.tmp") so concurrent
-	// everyapi processes writing the sanitizer config can't share one temp
-	// file and rename a half-written one over the real config; remove the
-	// temp on any error path. (Mirrors config.Save / SaveSettings.)
+	// Unique temp name (not a fixed "sanitizer.json.tmp") so concurrent everyapi processes writing the sanitizer config can't share one temp file and rename a half-written one over the real config; remove the temp on any error path. (Mirrors config.Save / SaveSettings.)
 	f, err := os.CreateTemp(filepath.Dir(path), "sanitizer.json.tmp-*")
 	if err != nil {
 		return fmt.Errorf("create temp sanitizer config: %w", err)
@@ -122,10 +97,7 @@ func SaveFileConfig(fc *FileConfig) error {
 	return nil
 }
 
-// BuildDetectors returns the active detector set described by fc:
-// every built-in NOT in fc.Disabled, plus every valid custom pattern.
-// Used by the server bootstrap so a single helper threads from
-// "config on disk" to "detector slice the engine takes".
+// BuildDetectors returns the active detector set described by fc: every built-in NOT in fc.Disabled, plus every valid custom pattern. Used by the server bootstrap so a single helper threads from "config on disk" to "detector slice the engine takes".
 //
 // Passing a nil receiver is OK — returns BuiltinDetectors() unchanged.
 func (fc *FileConfig) BuildDetectors() []Detector {
@@ -146,8 +118,7 @@ func (fc *FileConfig) BuildDetectors() []Detector {
 		}
 		out = append(out, d)
 	}
-	// Append any opt-in detectors the user explicitly enabled (and didn't
-	// also disable). These ship off by default; Enabled turns them on.
+	// Append any opt-in detectors the user explicitly enabled (and didn't also disable). These ship off by default; Enabled turns them on.
 	for name, ctor := range optInDetectorsByName() {
 		if enabled[name] && !disabled[name] {
 			out = append(out, ctor())
@@ -159,10 +130,7 @@ func (fc *FileConfig) BuildDetectors() []Detector {
 	return out
 }
 
-// AllBuiltinNames returns the names of every shipped detector — the
-// default-on set plus the opt-in ones — so the configure wizard can
-// render the full toggle list. Default-on detectors come first, in
-// registration order, followed by the opt-in detectors.
+// AllBuiltinNames returns the names of every shipped detector — the default-on set plus the opt-in ones — so the configure wizard can render the full toggle list. Default-on detectors come first, in registration order, followed by the opt-in detectors.
 func AllBuiltinNames() []string {
 	bs := BuiltinDetectors()
 	names := make([]string, 0, len(bs)+len(OptInDetectorNames()))

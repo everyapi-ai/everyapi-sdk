@@ -1,14 +1,6 @@
-// Seller-side Antigravity OAuth (CLI side of /api/seller/antigravity/oauth/*).
-// Wire-identical to the Gemini loopback flow (seller_gemini_oauth.go) —
-// the CLI runs a local 127.0.0.1 listener, the backend hands back a
-// Google authorize URL pointing at it, and the code lands on the listener
-// with no manual paste. The ONLY difference from gemini is the endpoint
-// path: the backend authorizes a distinct Google OAuth client (the
-// Antigravity desktop client) whose Code Assist tier serves the
-// antigravity model set.
+// Seller-side Antigravity OAuth (CLI side of /api/seller/antigravity/oauth/*). Wire-identical to the Gemini loopback flow (seller_gemini_oauth.go) — the CLI runs a local 127.0.0.1 listener, the backend hands back a Google authorize URL pointing at it, and the code lands on the listener with no manual paste. The ONLY difference from gemini is the endpoint path: the backend authorizes a distinct Google OAuth client (the Antigravity desktop client) whose Code Assist tier serves the antigravity model set.
 //
-// Both calls require WithCookieJar — the backend stashes flow state in a
-// session keyed by the `everyapi_session` cookie, same as gemini/codex.
+// Both calls require WithCookieJar — the backend stashes flow state in a session keyed by the `everyapi_session` cookie, same as gemini/codex.
 package api
 
 import (
@@ -16,16 +8,13 @@ import (
 	"errors"
 )
 
-// SellerAntigravityOAuthStart is the /start response: AuthorizeURL is what
-// the user opens; State correlates the loopback callback.
+// SellerAntigravityOAuthStart is the /start response: AuthorizeURL is what the user opens; State correlates the loopback callback.
 type SellerAntigravityOAuthStart struct {
 	AuthorizeURL string `json:"authorize_url"`
 	State        string `json:"state"`
 }
 
-// StartSellerAntigravityOAuth kicks off an Antigravity OAuth flow with the
-// CLI-chosen loopback redirect. The backend validates redirectURI is a
-// real loopback URL before building the authorize URL.
+// StartSellerAntigravityOAuth kicks off an Antigravity OAuth flow with the CLI-chosen loopback redirect. The backend validates redirectURI is a real loopback URL before building the authorize URL.
 func (c *Client) StartSellerAntigravityOAuth(ctx context.Context, name, models, redirectURI string) (*SellerAntigravityOAuthStart, error) {
 	body := map[string]string{
 		"name":         name,
@@ -46,17 +35,14 @@ func (c *Client) StartSellerAntigravityOAuth(ctx context.Context, name, models, 
 	return &env.Data, nil
 }
 
-// SellerAntigravityOAuthResult is the post-exchange payload — new channel
-// id + token expiry — the CLI prints back to the user.
+// SellerAntigravityOAuthResult is the post-exchange payload — new channel id + token expiry — the CLI prints back to the user.
 type SellerAntigravityOAuthResult struct {
 	ChannelID   int
 	ExpiresAt   string
 	LastRefresh string
 }
 
-// CompleteSellerAntigravityOAuth ships the code + state the CLI received on
-// its loopback listener. The backend finishes the token exchange with
-// Google and mints the antigravity-typed channel.
+// CompleteSellerAntigravityOAuth ships the code + state the CLI received on its loopback listener. The backend finishes the token exchange with Google and mints the antigravity-typed channel.
 func (c *Client) CompleteSellerAntigravityOAuth(ctx context.Context, code, state string) (*SellerAntigravityOAuthResult, error) {
 	body := map[string]string{"code": code, "state": state}
 	var env struct {

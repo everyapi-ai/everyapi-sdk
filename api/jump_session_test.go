@@ -14,11 +14,7 @@ func TestCreateJumpSession_HappyPath(t *testing.T) {
 		if r.Method != "POST" || r.URL.Path != "/api/cli/jump-session" {
 			t.Errorf("got %s %s, want POST /api/cli/jump-session", r.Method, r.URL.Path)
 		}
-		// Body is opaque now — backend doesn't take any input beyond
-		// the auth header. We don't fail the test on a non-empty body
-		// (the SDK does send a nil body that encodes to "null"), but
-		// we DO assert nothing leaks an `intent` key, which would
-		// indicate a regression to the old client-driven URL routing.
+		// Body is opaque now — backend doesn't take any input beyond the auth header. We don't fail the test on a non-empty body (the SDK does send a nil body that encodes to "null"), but we DO assert nothing leaks an `intent` key, which would indicate a regression to the old client-driven URL routing.
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		if _, hasIntent := body["intent"]; hasIntent {
@@ -51,9 +47,7 @@ func TestCreateJumpSession_HappyPath(t *testing.T) {
 	}
 }
 
-// TestCreateJumpSession_PropagatesUnauthorized: an expired token
-// must surface via IsUnauthorized so the cmd layer can render the
-// re-login hint.
+// TestCreateJumpSession_PropagatesUnauthorized: an expired token must surface via IsUnauthorized so the cmd layer can render the re-login hint.
 func TestCreateJumpSession_PropagatesUnauthorized(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

@@ -2,18 +2,9 @@ package api
 
 import "strings"
 
-// WebOriginFromBase maps official API hosts
-// (`https://api.everyapi.ai` / `https://api-cn.everyapi.ai`) to the dashboard
-// host (`https://app.everyapi.ai`), so any dashboard URL (wallet, seller,
-// channels) printed by the CLI or the MCP server points at the UI host
-// (app.*) — NOT the API host and NOT the marketing apex (`everyapi.ai`, the
-// bare domain, is the landing page and serves no dashboard routes).
+// WebOriginFromBase maps official API hosts (`https://api.everyapi.ai` / `https://api-cn.everyapi.ai`) to the dashboard host (`https://app.everyapi.ai`), so any dashboard URL (wallet, seller, channels) printed by the CLI or the MCP server points at the UI host (app.*) — NOT the API host and NOT the marketing apex (`everyapi.ai`, the bare domain, is the landing page and serves no dashboard routes).
 //
-// Cheap heuristic: only an "api." subdomain is rewritten. Non-matching
-// bases (localhost, custom self-host hosts) pass through unchanged so
-// they still resolve. Both http:// and https:// are handled so a
-// self-hosted setup pointed at http://api.example.com still produces
-// http://app.example.com.
+// Cheap heuristic: only an "api." subdomain is rewritten. Non-matching bases (localhost, custom self-host hosts) pass through unchanged so they still resolve. Both http:// and https:// are handled so a self-hosted setup pointed at http://api.example.com still produces http://app.example.com.
 func WebOriginFromBase(base string) string {
 	if base == "https://api-cn.everyapi.ai" {
 		return "https://app.everyapi.ai"

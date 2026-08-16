@@ -1,7 +1,4 @@
-// Upstream-status SDK: GET /api/upstream-status. A public,
-// Statuspage-style health rollup of the upstream providers the gateway
-// relays to (OpenAI / Anthropic / etc.). No auth — construct the
-// Client with an empty token (api.New(base, "")).
+// Upstream-status SDK: GET /api/upstream-status. A public, Statuspage-style health rollup of the upstream providers the gateway relays to (OpenAI / Anthropic / etc.). No auth — construct the Client with an empty token (api.New(base, "")).
 package api
 
 import (
@@ -9,8 +6,7 @@ import (
 	"errors"
 )
 
-// UpstreamComponent is one non-operational sub-component of a provider
-// (only degraded/outage components are returned by the backend).
+// UpstreamComponent is one non-operational sub-component of a provider (only degraded/outage components are returned by the backend).
 type UpstreamComponent struct {
 	Name   string `json:"name"`
 	Status string `json:"status"` // operational | degraded_performance | partial_outage | major_outage | under_maintenance
@@ -24,10 +20,7 @@ type UpstreamIncident struct {
 	UpdatedAt string `json:"updated_at"`
 }
 
-// UpstreamProvider is one provider's current health. Indicator is the
-// Statuspage vocab: none (green) | minor (yellow) | major | critical
-// (red) | unknown. Components / Incidents are present only when
-// non-empty. FetchedAt is unix seconds; 0 means never fetched yet.
+// UpstreamProvider is one provider's current health. Indicator is the Statuspage vocab: none (green) | minor (yellow) | major | critical (red) | unknown. Components / Incidents are present only when non-empty. FetchedAt is unix seconds; 0 means never fetched yet.
 type UpstreamProvider struct {
 	ID          string              `json:"id"`
 	Name        string              `json:"name"`
@@ -40,9 +33,7 @@ type UpstreamProvider struct {
 	FetchedAt   int64               `json:"fetched_at"`
 }
 
-// GetUpstreamStatus reads the public GET /api/upstream-status. The
-// backend caches the snapshot ~60s, so polling tighter than that just
-// returns the same data.
+// GetUpstreamStatus reads the public GET /api/upstream-status. The backend caches the snapshot ~60s, so polling tighter than that just returns the same data.
 func (c *Client) GetUpstreamStatus(ctx context.Context) ([]UpstreamProvider, error) {
 	var env struct {
 		Success bool   `json:"success"`

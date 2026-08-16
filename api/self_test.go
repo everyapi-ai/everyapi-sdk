@@ -8,17 +8,12 @@ import (
 	"testing"
 )
 
-// GetSelf must distinguish the backend's two rejection shapes so callers
-// (cmd/status, doctor) can map a bad token to "session expired": an
-// invalid access token comes back HTTP 200 + {success:false} (legacy
-// envelope convention), which must surface as *EnvelopeError — NOT a
-// generic error and NOT an *APIError (that's reserved for non-2xx).
+// GetSelf must distinguish the backend's two rejection shapes so callers (cmd/status, doctor) can map a bad token to "session expired": an invalid access token comes back HTTP 200 + {success:false} (legacy envelope convention), which must surface as *EnvelopeError — NOT a generic error and NOT an *APIError (that's reserved for non-2xx).
 func TestGetSelf_EnvelopeRejection(t *testing.T) {
 	t.Run("200 + success:false is an EnvelopeError", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			// HTTP 200 — the backend's authHelper returns this for an
-			// invalid access token, not a 401.
+			// HTTP 200 — the backend's authHelper returns this for an invalid access token, not a 401.
 			w.Write([]byte(`{"success":false,"message":"access token invalid"}`))
 		}))
 		defer srv.Close()
@@ -40,9 +35,7 @@ func TestGetSelf_EnvelopeRejection(t *testing.T) {
 	})
 
 	t.Run("200 + code:unauthorized is promoted to a 401", func(t *testing.T) {
-		// The backend tags an invalid/expired token this way (HTTP 200,
-		// kept for legacy dashboard-envelope compat). c.do must promote it so
-		// IsUnauthorized catches it for EVERY endpoint, not just GetSelf.
+		// The backend tags an invalid/expired token this way (HTTP 200, kept for legacy dashboard-envelope compat). c.do must promote it so IsUnauthorized catches it for EVERY endpoint, not just GetSelf.
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(`{"success":false,"code":"unauthorized","message":"access token invalid"}`))
@@ -71,10 +64,7 @@ func TestGetSelf_EnvelopeRejection(t *testing.T) {
 	})
 }
 
-// ProbeRelayToken must hit the relay auth path (GET /v1/models) and
-// translate the gateway's verdict into a plain error the caller can
-// classify with IsUnauthorized — that's the whole point of the
-// pre-flight check in `everyapi use` / `everyapi status`.
+// ProbeRelayToken must hit the relay auth path (GET /v1/models) and translate the gateway's verdict into a plain error the caller can classify with IsUnauthorized — that's the whole point of the pre-flight check in `everyapi use` / `everyapi status`.
 func TestProbeRelayToken(t *testing.T) {
 	t.Run("200 means the token can relay", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -110,10 +100,7 @@ func TestProbeRelayToken(t *testing.T) {
 	})
 }
 
-// RelayModels backs the `everyapi use hermes` model picker: it must hit
-// GET /v1/models with the relay key and return the ids from the
-// OpenAI-shaped `{"data":[{"id":...}]}` body, filtering blanks so the
-// picker doesn't render empty rows.
+// RelayModels backs the `everyapi use hermes` model picker: it must hit GET /v1/models with the relay key and return the ids from the OpenAI-shaped `{"data":[{"id":...}]}` body, filtering blanks so the picker doesn't render empty rows.
 func TestRelayModels(t *testing.T) {
 	t.Run("parses ids and filters blanks", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -154,10 +141,7 @@ func TestRelayModels(t *testing.T) {
 	})
 }
 
-// RelayModelCatalog backs the `everyapi use <provider>` pickers: it must
-// carry each model's owned_by (provider attribution) and
-// supported_endpoint_types (so non-chat models can be filtered out),
-// while still dropping blank ids.
+// RelayModelCatalog backs the `everyapi use <provider>` pickers: it must carry each model's owned_by (provider attribution) and supported_endpoint_types (so non-chat models can be filtered out), while still dropping blank ids.
 func TestRelayModelCatalog(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

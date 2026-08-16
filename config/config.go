@@ -1,9 +1,6 @@
 // Package config reads and writes ~/.config/everyapi/credentials.json.
 //
-// We store the API base alongside the access token so a dev can point
-// the CLI at a local backend without rebuilding (and so the same CLI
-// binary works for self-hosters with a non-default base). Production
-// users never edit this file — `everyapi login` writes it.
+// We store the API base alongside the access token so a dev can point the CLI at a local backend without rebuilding (and so the same CLI binary works for self-hosters with a non-default base). Production users never edit this file — `everyapi login` writes it.
 package config
 
 import (
@@ -16,23 +13,12 @@ import (
 	"time"
 )
 
-// DefaultAPIBase is the production gateway. Hardcoded — no env-var
-// fast path (so a typo in the shell environment, or a stowaway
-// `export EVERYAPI_API_BASE=...` line in someone's rc file, can't
-// silently re-route the CLI at a different server). The
-// credentials file's api_base field overrides this at runtime for
-// self-hosters / local development, but landing it requires an
-// explicit `--api-base` flag on `everyapi login` — opt-in, not
-// ambient.
+// DefaultAPIBase is the production gateway. Hardcoded — no env-var fast path (so a typo in the shell environment, or a stowaway `export EVERYAPI_API_BASE=...` line in someone's rc file, can't silently re-route the CLI at a different server). The credentials file's api_base field overrides this at runtime for self-hosters / local development, but landing it requires an explicit `--api-base` flag on `everyapi login` — opt-in, not ambient.
 const DefaultAPIBase = "https://api.everyapi.ai"
 
 const ChinaAPIBase = "https://api-cn.everyapi.ai"
 
-// ResolveAPIBase picks the gateway base URL for a command: an explicit
-// override (e.g. a --base flag) wins, else a custom/self-hosted gateway from
-// credentials.json, else settings.gateway_region, else the logged-in official
-// gateway from credentials.json, else the public default. The trailing slash is
-// trimmed so callers can append "/api/..." without producing "//".
+// ResolveAPIBase picks the gateway base URL for a command: an explicit override (e.g. a --base flag) wins, else a custom/self-hosted gateway from credentials.json, else settings.gateway_region, else the logged-in official gateway from credentials.json, else the public default. The trailing slash is trimmed so callers can append "/api/..." without producing "//".
 func ResolveAPIBase(override string) string {
 	if base := strings.TrimRight(strings.TrimSpace(override), "/"); base != "" {
 		return base
@@ -44,18 +30,9 @@ func ResolveAPIBase(override string) string {
 	return ResolveAPIBaseForBase(loginBase)
 }
 
-// ResolveAPIBaseForBase is the base-parameterized core of ResolveAPIBase: given
-// an account's login base (typically creds.APIBase), it applies
-// settings.gateway_region on top. A non-official (self-hosted) login base is
-// returned as-is; an official base yields to the region preference; an empty
-// base falls back to the region preference, then the public default.
+// ResolveAPIBaseForBase is the base-parameterized core of ResolveAPIBase: given an account's login base (typically creds.APIBase), it applies settings.gateway_region on top. A non-official (self-hosted) login base is returned as-is; an official base yields to the region preference; an empty base falls back to the region preference, then the public default.
 //
-// Prefer this over ResolveAPIBase("") whenever the credentials in hand may
-// differ from what is on disk — injected creds, tests, or a client built from a
-// *Credentials that was not the one config.Load() returned — so the dial base
-// tracks the passed credentials rather than silently re-reading the file. The
-// gateway_region preference is still read from disk; only the login base is
-// taken from the argument.
+// Prefer this over ResolveAPIBase("") whenever the credentials in hand may differ from what is on disk — injected creds, tests, or a client built from a *Credentials that was not the one config.Load() returned — so the dial base tracks the passed credentials rather than silently re-reading the file. The gateway_region preference is still read from disk; only the login base is taken from the argument.
 func ResolveAPIBaseForBase(loginBase string) string {
 	var credsBase string
 	if strings.TrimSpace(loginBase) != "" {
@@ -94,70 +71,38 @@ func isOfficialAPIBase(base string) bool {
 	return base == DefaultAPIBase || base == ChinaAPIBase
 }
 
-// Credentials is the on-disk credentials payload. JSON tags match the
-// file format. Stored mode 0600.
+// Credentials is the on-disk credentials payload. JSON tags match the file format. Stored mode 0600.
 type Credentials struct {
 	APIBase string `json:"api_base"`
-	// AccessToken is the user-level token from device-auth. It
-	// authenticates the management API (UserAuth: /api/user/self,
-	// /api/token/*) — NOT the relay. The relay (/v1/messages,
-	// TokenAuth → ValidateUserToken) needs a relay API key, a
-	// separate credential type: that's RelayKey.
+	// AccessToken is the user-level token from device-auth. It authenticates the management API (UserAuth: /api/user/self, /api/token/*) — NOT the relay. The relay (/v1/messages, TokenAuth → ValidateUserToken) needs a relay API key, a separate credential type: that's RelayKey.
 	AccessToken string `json:"access_token"`
-	// RelayKey is a relay API key (sk-everyapi-…, a row in the Token
-	// table) used as the upstream auth for `everyapi use`. Resolved
-	// from the account's tokens via the management API and cached
-	// here. Empty in files written before this field existed —
-	// resolved lazily on the next use/status/login.
+	// RelayKey is a relay API key (sk-everyapi-…, a row in the Token table) used as the upstream auth for `everyapi use`. Resolved from the account's tokens via the management API and cached here. Empty in files written before this field existed — resolved lazily on the next use/status/login.
 	RelayKey string `json:"relay_key,omitempty"`
-	// RelayKeyTokenID identifies the account token cached in RelayKey. It lets
-	// interactive clients restore and mark the current selection without
-	// disclosing every candidate key. Zero means unknown (legacy/OAuth creds).
+	// RelayKeyTokenID identifies the account token cached in RelayKey. It lets interactive clients restore and mark the current selection without disclosing every candidate key. Zero means unknown (legacy/OAuth creds).
 	RelayKeyTokenID int `json:"relay_key_token_id,omitempty"`
-	// RefreshToken renews an OAuth2-issued RelayKey before it expires
-	// (device-grant fallback only). Empty for the legacy flow, whose
-	// keys don't expire.
+	// RefreshToken renews an OAuth2-issued RelayKey before it expires (device-grant fallback only). Empty for the legacy flow, whose keys don't expire.
 	RefreshToken string `json:"refresh_token,omitempty"`
-	// RelayKeyExpiresAt is the RelayKey's expiry (unix seconds; 0 =
-	// unknown / non-expiring). Drives proactive refresh.
+	// RelayKeyExpiresAt is the RelayKey's expiry (unix seconds; 0 = unknown / non-expiring). Drives proactive refresh.
 	RelayKeyExpiresAt int64 `json:"relay_key_expires_at,omitempty"`
-	// OAuthClientID is the OAuth2 client id used at login, required to
-	// refresh the RelayKey. Empty for the legacy flow.
+	// OAuthClientID is the OAuth2 client id used at login, required to refresh the RelayKey. Empty for the legacy flow.
 	OAuthClientID string `json:"oauth_client_id,omitempty"`
 	UserID        int    `json:"user_id,omitempty"`
 	Username      string `json:"username,omitempty"`
-	// Role mirrors the backend's RoleX enum (0=guest, 1=common,
-	// 10=admin, 100=root). Persisted at login + opportunistically
-	// refreshed by `everyapi status` so help-text rendering can
-	// hide admin-only subcommands locally. Empty/0 in files written
-	// before this field existed — re-login or `status` repopulates.
+	// Role mirrors the backend's RoleX enum (0=guest, 1=common, 10=admin, 100=root). Persisted at login + opportunistically refreshed by `everyapi status` so help-text rendering can hide admin-only subcommands locally. Empty/0 in files written before this field existed — re-login or `status` repopulates.
 	Role int `json:"role,omitempty"`
-	// AvatarURL mirrors the account's profile picture URL from
-	// /api/user/self. Persisted at login and opportunistically refreshed by
-	// `everyapi auth status` — same lifecycle as Role — so a local status read
-	// can report it without a network round-trip. Empty when the account has no
-	// picture or the file predates this field.
+	// AvatarURL mirrors the account's profile picture URL from /api/user/self. Persisted at login and opportunistically refreshed by `everyapi auth status` — same lifecycle as Role — so a local status read can report it without a network round-trip. Empty when the account has no picture or the file predates this field.
 	AvatarURL string `json:"avatar_url,omitempty"`
 }
 
-// IsAdmin reports whether the credential holder can drive
-// admin-gated endpoints. Backend uses role >= RoleAdminUser (10) as
-// the threshold; we mirror that here. Returns false for empty/0
-// (legacy credentials).
+// IsAdmin reports whether the credential holder can drive admin-gated endpoints. Backend uses role >= RoleAdminUser (10) as the threshold; we mirror that here. Returns false for empty/0 (legacy credentials).
 func (c *Credentials) IsAdmin() bool {
 	return c != nil && c.Role >= 10
 }
 
-// ErrNoCredentials is returned by Load when the file is missing. The
-// `everyapi login` flow should produce a friendly "please log in"
-// message on this; other errors (corrupt JSON, perms) bubble up as-is
-// so the user sees the real problem.
+// ErrNoCredentials is returned by Load when the file is missing. The `everyapi login` flow should produce a friendly "please log in" message on this; other errors (corrupt JSON, perms) bubble up as-is so the user sees the real problem.
 var ErrNoCredentials = errors.New("not logged in")
 
-// ConfigDir returns ~/.config/everyapi (XDG_CONFIG_HOME respected on
-// Linux; ~/.config is the de facto cross-platform location for CLI
-// state — we deliberately don't use AppData/Library on Win/Mac to
-// keep the path predictable across platforms for support).
+// ConfigDir returns ~/.config/everyapi (XDG_CONFIG_HOME respected on Linux; ~/.config is the de facto cross-platform location for CLI state — we deliberately don't use AppData/Library on Win/Mac to keep the path predictable across platforms for support).
 func ConfigDir() (string, error) {
 	if x := os.Getenv("XDG_CONFIG_HOME"); x != "" {
 		return filepath.Join(x, "everyapi"), nil
@@ -169,13 +114,7 @@ func ConfigDir() (string, error) {
 	return filepath.Join(home, ".config", "everyapi"), nil
 }
 
-// EnsureLogPath resolves the config dir, creates it (0o700) if missing,
-// and returns the full path to a log file named `name` inside it. It
-// centralizes the "resolve dir → mkdir → join filename" boilerplate that
-// each on-disk log (sanitizer.log, use.log, the detached-proxy log)
-// otherwise repeats; callers still open the file themselves since they
-// differ in mode (append vs read-write) and lifetime (log.Logger,
-// inherited fd, locked single write).
+// EnsureLogPath resolves the config dir, creates it (0o700) if missing, and returns the full path to a log file named `name` inside it. It centralizes the "resolve dir → mkdir → join filename" boilerplate that each on-disk log (sanitizer.log, use.log, the detached-proxy log) otherwise repeats; callers still open the file themselves since they differ in mode (append vs read-write) and lifetime (log.Logger, inherited fd, locked single write).
 func EnsureLogPath(name string) (string, error) {
 	dir, err := ConfigDir()
 	if err != nil {
@@ -195,9 +134,7 @@ func credentialsPath() (string, error) {
 	return filepath.Join(dir, "credentials.json"), nil
 }
 
-// Load reads credentials from disk. Returns ErrNoCredentials when the
-// file doesn't exist — callers should special-case that to print a
-// "run 'everyapi login' first" message rather than the raw error.
+// Load reads credentials from disk. Returns ErrNoCredentials when the file doesn't exist — callers should special-case that to print a "run 'everyapi login' first" message rather than the raw error.
 func Load() (*Credentials, error) {
 	path, err := credentialsPath()
 	if err != nil {
@@ -226,11 +163,7 @@ func normalizeAPIBase(base string) string {
 	return base
 }
 
-// Save writes credentials atomically (tmp + rename) at mode 0600. The
-// atomic dance prevents a half-written file if the process is killed
-// mid-write; mode 0600 keeps the token off prying eyes on shared
-// machines (XDG_CONFIG_HOME is per-user already, but being explicit
-// matches `gh auth` / `aws configure` conventions).
+// Save writes credentials atomically (tmp + rename) at mode 0600. The atomic dance prevents a half-written file if the process is killed mid-write; mode 0600 keeps the token off prying eyes on shared machines (XDG_CONFIG_HOME is per-user already, but being explicit matches `gh auth` / `aws configure` conventions).
 func Save(c *Credentials) error {
 	dir, err := ConfigDir()
 	if err != nil {
@@ -239,21 +172,14 @@ func Save(c *Credentials) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("mkdir config: %w", err)
 	}
-	// Reap temp files orphaned by a previous process hard-killed between
-	// the write and the rename below — each Save uses a unique temp name,
-	// so nothing else ever overwrites or removes them and they'd otherwise
-	// accumulate forever. Best-effort and age-guarded (see
-	// sweepStaleTempFiles); runs before our own write and again after the
-	// rename succeeds.
+	// Reap temp files orphaned by a previous process hard-killed between the write and the rename below — each Save uses a unique temp name, so nothing else ever overwrites or removes them and they'd otherwise accumulate forever. Best-effort and age-guarded (see sweepStaleTempFiles); runs before our own write and again after the rename succeeds.
 	sweepStaleTempFiles(dir)
 	path := filepath.Join(dir, "credentials.json")
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal credentials: %w", err)
 	}
-	// Unique temp name (not a fixed "credentials.json.tmp") so two everyapi
-	// processes writing credentials concurrently can't share one temp file
-	// and rename a half-written one over the real credentials.
+	// Unique temp name (not a fixed "credentials.json.tmp") so two everyapi processes writing credentials concurrently can't share one temp file and rename a half-written one over the real credentials.
 	f, err := os.CreateTemp(dir, "credentials.json.tmp-*")
 	if err != nil {
 		return fmt.Errorf("create temp credentials: %w", err)
@@ -281,20 +207,10 @@ func Save(c *Credentials) error {
 	return nil
 }
 
-// staleTempAge is how old a leftover credentials.json.tmp-* file must be
-// before sweepStaleTempFiles reaps it. A real Save's temp lives for
-// microseconds (create → write → chmod → rename), so anything this old
-// is an orphan from a process killed between write and rename. The age
-// floor also guarantees we never delete a *concurrent* Save's in-flight
-// temp (always brand new), preserving the unique-temp-name concurrency
-// safety the rename dance relies on.
+// staleTempAge is how old a leftover credentials.json.tmp-* file must be before sweepStaleTempFiles reaps it. A real Save's temp lives for microseconds (create → write → chmod → rename), so anything this old is an orphan from a process killed between write and rename. The age floor also guarantees we never delete a *concurrent* Save's in-flight temp (always brand new), preserving the unique-temp-name concurrency safety the rename dance relies on.
 const staleTempAge = 5 * time.Minute
 
-// sweepStaleTempFiles best-effort removes orphaned credentials.json.tmp-*
-// files in dir. Every error is ignored: a sweep failure must never fail
-// the Save it runs alongside — these files are pure litter, not
-// correctness-critical, and only files older than staleTempAge are
-// touched so a concurrent writer's fresh temp is left alone.
+// sweepStaleTempFiles best-effort removes orphaned credentials.json.tmp-* files in dir. Every error is ignored: a sweep failure must never fail the Save it runs alongside — these files are pure litter, not correctness-critical, and only files older than staleTempAge are touched so a concurrent writer's fresh temp is left alone.
 func sweepStaleTempFiles(dir string) {
 	matches, err := filepath.Glob(filepath.Join(dir, "credentials.json.tmp-*"))
 	if err != nil {
@@ -312,8 +228,7 @@ func sweepStaleTempFiles(dir string) {
 	}
 }
 
-// Delete removes the credentials file. Returns nil on missing file
-// (logout is idempotent — calling it twice shouldn't error).
+// Delete removes the credentials file. Returns nil on missing file (logout is idempotent — calling it twice shouldn't error).
 func Delete() error {
 	path, err := credentialsPath()
 	if err != nil {

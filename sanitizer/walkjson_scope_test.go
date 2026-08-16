@@ -2,10 +2,7 @@ package sanitizer
 
 import "testing"
 
-// TestWalkJSONScopePropagates guards the path-scoped contract: once any ancestor
-// key is a text key, every nested string is user text and must be visited — the
-// old immediate-parent-only walk leaked secrets nested under a text-keyed object
-// (e.g. tool arguments / a JSON-schema description under content blocks).
+// TestWalkJSONScopePropagates guards the path-scoped contract: once any ancestor key is a text key, every nested string is user text and must be visited — the old immediate-parent-only walk leaked secrets nested under a text-keyed object (e.g. tool arguments / a JSON-schema description under content blocks).
 func TestWalkJSONScopePropagates(t *testing.T) {
 	textKeys := map[string]bool{"content": true}
 	root := map[string]any{
@@ -37,9 +34,7 @@ func TestWalkJSONScopePropagates(t *testing.T) {
 	}
 }
 
-// TestWalkJSON_BinarySubtreeExcluded: a base64 blob under a binary key
-// (source/data/inlineData) must never be scanned, even when it sits in a
-// text-scoped subtree.
+// TestWalkJSON_BinarySubtreeExcluded: a base64 blob under a binary key (source/data/inlineData) must never be scanned, even when it sits in a text-scoped subtree.
 func TestWalkJSON_BinarySubtreeExcluded(t *testing.T) {
 	textKeys := map[string]bool{"content": true}
 	root := map[string]any{
@@ -64,8 +59,7 @@ func TestWalkJSON_BinarySubtreeExcluded(t *testing.T) {
 	}
 }
 
-// TestWalkJSON_DataURLLeafExcluded: an image_url.url data: URL is binary
-// and must not be scanned.
+// TestWalkJSON_DataURLLeafExcluded: an image_url.url data: URL is binary and must not be scanned.
 func TestWalkJSON_DataURLLeafExcluded(t *testing.T) {
 	textKeys := map[string]bool{"content": true}
 	root := map[string]any{
@@ -89,8 +83,7 @@ func TestWalkJSON_DataURLLeafExcluded(t *testing.T) {
 	}
 }
 
-// TestWalkJSON_NumericScopeOffInToolArgs: the numericOK flag passed to fn
-// must be false inside tool-argument / schema subtrees and true elsewhere.
+// TestWalkJSON_NumericScopeOffInToolArgs: the numericOK flag passed to fn must be false inside tool-argument / schema subtrees and true elsewhere.
 func TestWalkJSON_NumericScopeOffInToolArgs(t *testing.T) {
 	textKeys := map[string]bool{"content": true, "input": true}
 	root := map[string]any{

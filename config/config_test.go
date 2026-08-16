@@ -6,19 +6,13 @@ import (
 	"testing"
 )
 
-// TestSaveLoadRoundTrip writes credentials, reads them back, and
-// confirms every field survives the JSON round-trip — guards against
-// future schema renames silently dropping fields.
+// TestSaveLoadRoundTrip writes credentials, reads them back, and confirms every field survives the JSON round-trip — guards against future schema renames silently dropping fields.
 func TestSaveLoadRoundTrip(t *testing.T) {
-	// Redirect XDG_CONFIG_HOME at a temp dir so the test never
-	// touches a real user's credentials file. ConfigDir() honors
-	// this variable first.
+	// Redirect XDG_CONFIG_HOME at a temp dir so the test never touches a real user's credentials file. ConfigDir() honors this variable first.
 	tmp := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", tmp)
 
-	// Populate EVERY field on the struct (all 9) so a future schema
-	// rename that drops a json tag — or a tag typo that round-trips to
-	// the zero value — fails the *got != *want comparison below.
+	// Populate EVERY field on the struct (all 9) so a future schema rename that drops a json tag — or a tag typo that round-trips to the zero value — fails the *got != *want comparison below.
 	want := &Credentials{
 		APIBase:           "http://localhost:8787",
 		AccessToken:       "rl_abcdef1234567890abcdef1234567890",
@@ -53,8 +47,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 }
 
-// TestLoad_Missing returns the ErrNoCredentials sentinel so callers
-// can render "run 'everyapi login' first" rather than a raw file error.
+// TestLoad_Missing returns the ErrNoCredentials sentinel so callers can render "run 'everyapi login' first" rather than a raw file error.
 func TestLoad_Missing(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", tmp)
@@ -65,10 +58,7 @@ func TestLoad_Missing(t *testing.T) {
 	}
 }
 
-// TestLoad_AppliesAPIBaseDefault — a credentials file written by an
-// older CLI without the api_base field should still come back with
-// the production URL filled in, so api.New(creds.APIBase, …) doesn't
-// hit an empty URL.
+// TestLoad_AppliesAPIBaseDefault — a credentials file written by an older CLI without the api_base field should still come back with the production URL filled in, so api.New(creds.APIBase, …) doesn't hit an empty URL.
 func TestLoad_AppliesAPIBaseDefault(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", tmp)
@@ -162,8 +152,7 @@ func TestResolveAPIBase_PreservesCustomCredentialGateway(t *testing.T) {
 	}
 }
 
-// TestDelete_Idempotent: a fresh logout without prior login (or two
-// consecutive logouts) must not error.
+// TestDelete_Idempotent: a fresh logout without prior login (or two consecutive logouts) must not error.
 func TestDelete_Idempotent(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", tmp)
@@ -205,8 +194,7 @@ func TestSettingsSafetyPreferencesPersistExplicitTrueAndFalse(t *testing.T) {
 	}
 }
 
-// TestEnsureLogPath verifies the shared log-path helper resolves under
-// the config dir, creates the dir if absent, and returns the joined path.
+// TestEnsureLogPath verifies the shared log-path helper resolves under the config dir, creates the dir if absent, and returns the joined path.
 func TestEnsureLogPath(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", tmp)

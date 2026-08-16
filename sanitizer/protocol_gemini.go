@@ -2,10 +2,7 @@ package sanitizer
 
 import "strings"
 
-// GeminiProtocol covers Google's Gemini generateContent surface
-// (and streamGenerateContent), as proxied through the EveryAPI gateway.
-// The path shape is `/v1beta/models/{model}:{method}` where method is
-// `generateContent`, `streamGenerateContent`, or `embedContent`.
+// GeminiProtocol covers Google's Gemini generateContent surface (and streamGenerateContent), as proxied through the EveryAPI gateway. The path shape is `/v1beta/models/{model}:{method}` where method is `generateContent`, `streamGenerateContent`, or `embedContent`.
 //
 // Sanitisable text fields:
 //
@@ -19,9 +16,7 @@ import "strings"
 //
 //   - generationConfig.* (temperature, topK, topP, maxOutputTokens, candidateCount)
 //   - safetySettings.*
-//   - contents[].parts[].inlineData (base64-encoded bytes — substituting
-//     into base64 corrupts the binary). We don't touch `data` or
-//     `inlineData` keys.
+//   - contents[].parts[].inlineData (base64-encoded bytes — substituting into base64 corrupts the binary). We don't touch `data` or `inlineData` keys.
 //   - contents[].parts[].fileData (URI references)
 type GeminiProtocol struct{}
 
@@ -32,17 +27,13 @@ func (p *GeminiProtocol) PathMatch(path string) bool {
 	return strings.HasPrefix(path, "/v1beta/models/") || strings.HasPrefix(path, "/v1/models/")
 }
 
-// geminiTextKeys captures Gemini's text-bearing keys. `text` overlaps
-// with the other protocols but the key set still lives separately for
-// clarity. Deliberately omits `data` and `inlineData` so binary
-// base64 payloads pass through verbatim.
+// geminiTextKeys captures Gemini's text-bearing keys. `text` overlaps with the other protocols but the key set still lives separately for clarity. Deliberately omits `data` and `inlineData` so binary base64 payloads pass through verbatim.
 var geminiTextKeys = map[string]bool{
 	"text":        true, // parts[].text
 	"description": true, // functionDeclarations[].description, schema descriptions
 	"args":        true, // functionCall.args — tool-call arguments; mask outbound like OpenAI `arguments` / Anthropic `input`
 	"response":    true, // functionResponse.response — tool result, parity with Anthropic tool_result scanning
-	// "name" is deliberately NOT scanned: it's a routing identifier
-	// (function declaration name). Masking it corrupts the tool schema.
+	// "name" is deliberately NOT scanned: it's a routing identifier (function declaration name). Masking it corrupts the tool schema.
 }
 
 func (p *GeminiProtocol) RewriteRequest(body []byte, detectors []Detector, m *Mapping) ([]byte, error) {

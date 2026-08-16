@@ -44,8 +44,7 @@ func TestIsOfficialEveryAPIHost(t *testing.T) {
 	}
 }
 
-// makeLeaf builds a real self-signed leaf certificate with a fresh
-// key. No mocks — spkiPin must operate on an actual x509 cert.
+// makeLeaf builds a real self-signed leaf certificate with a fresh key. No mocks — spkiPin must operate on an actual x509 cert.
 func makeLeaf(t *testing.T) *x509.Certificate {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -91,11 +90,7 @@ func newTestReporter(buf *bytes.Buffer, expected map[string]struct{}) *pinReport
 	return &pinReporter{out: buf, expected: expected, seen: make(map[string]struct{})}
 }
 
-// TestInspectDormantWhenNoPins pins the v1 contract: with no baseline
-// configured the hook is a SILENT no-op on official hosts — no stderr
-// noise, never an error. (The earlier cut logged the observed pin on
-// every run; that was unactionable noise and not actually collected
-// anywhere, so it was removed.)
+// TestInspectDormantWhenNoPins pins the v1 contract: with no baseline configured the hook is a SILENT no-op on official hosts — no stderr noise, never an error. (The earlier cut logged the observed pin on every run; that was unactionable noise and not actually collected anywhere, so it was removed.)
 func TestInspectDormantWhenNoPins(t *testing.T) {
 	buf := &bytes.Buffer{}
 	r := newTestReporter(buf, map[string]struct{}{}) // empty = dormant
@@ -129,9 +124,7 @@ func TestInspectDisabledIsNoOp(t *testing.T) {
 	if !r.disabled {
 		t.Fatal("EVERYAPI_TLS_PIN=off should disable the reporter")
 	}
-	// Seed a non-empty expected set with a pin that does NOT match the
-	// cert, so an enabled reporter WOULD warn here — proving the
-	// `disabled` gate short-circuits the check, not just dormancy.
+	// Seed a non-empty expected set with a pin that does NOT match the cert, so an enabled reporter WOULD warn here — proving the `disabled` gate short-circuits the check, not just dormancy.
 	buf := &bytes.Buffer{}
 	r.out = buf
 	r.expected = map[string]struct{}{"some-other-pin": {}}
@@ -166,8 +159,7 @@ func TestInspectMatchVsMismatch(t *testing.T) {
 		t.Errorf("expected a mismatch warning, got: %q", buf.String())
 	}
 
-	// With enforce flipped on, a fresh mismatch DOES error (guards the
-	// reserved enforcement path the next change will turn on).
+	// With enforce flipped on, a fresh mismatch DOES error (guards the reserved enforcement path the next change will turn on).
 	r2 := newTestReporter(&bytes.Buffer{}, map[string]struct{}{pin: {}})
 	r2.enforce = true
 	if err := r2.inspect("app.everyapi.ai", [][]*x509.Certificate{{makeLeaf(t)}}); err == nil {
@@ -175,10 +167,7 @@ func TestInspectMatchVsMismatch(t *testing.T) {
 	}
 }
 
-// TestInspectMatchesIntermediateInChain is the core of the cert-rotation
-// fix: the leaf is NOT pinned, only an issuing intermediate is. A chain
-// whose leaf pin is absent but whose intermediate pin is present must
-// match silently — that is what lets the leaf rotate without a release.
+// TestInspectMatchesIntermediateInChain is the core of the cert-rotation fix: the leaf is NOT pinned, only an issuing intermediate is. A chain whose leaf pin is absent but whose intermediate pin is present must match silently — that is what lets the leaf rotate without a release.
 func TestInspectMatchesIntermediateInChain(t *testing.T) {
 	leaf := makeLeaf(t)
 	intermediate := makeLeaf(t) // stand-in for the issuing CA cert
@@ -195,8 +184,7 @@ func TestInspectMatchesIntermediateInChain(t *testing.T) {
 		t.Errorf("intermediate match must be silent (leaf rotation case), got: %q", buf.String())
 	}
 
-	// A chain where neither leaf nor intermediate is pinned → mismatch,
-	// and the warning reports the LEAF pin (chains[0][0]), not the others.
+	// A chain where neither leaf nor intermediate is pinned → mismatch, and the warning reports the LEAF pin (chains[0][0]), not the others.
 	other, otherInter := makeLeaf(t), makeLeaf(t)
 	if err := r.inspect("api.everyapi.ai", [][]*x509.Certificate{{other, otherInter}}); err != nil {
 		t.Fatalf("report-only mismatch must not error: %v", err)
@@ -214,10 +202,7 @@ func TestInspectMatchesIntermediateInChain(t *testing.T) {
 	}
 }
 
-// TestInspectMultiChainMatchAndEmptyGuard covers the cross-signed case —
-// cs.VerifiedChains can hold more than one chain (GTS R4 is itself
-// cross-signed) — and the empty-inner-chain guard protecting the
-// chains[0][0] deref on the mismatch path.
+// TestInspectMultiChainMatchAndEmptyGuard covers the cross-signed case — cs.VerifiedChains can hold more than one chain (GTS R4 is itself cross-signed) — and the empty-inner-chain guard protecting the chains[0][0] deref on the mismatch path.
 func TestInspectMultiChainMatchAndEmptyGuard(t *testing.T) {
 	intermediate := makeLeaf(t)
 	interPin := spkiPin(intermediate)
@@ -225,8 +210,7 @@ func TestInspectMultiChainMatchAndEmptyGuard(t *testing.T) {
 	buf := &bytes.Buffer{}
 	r := newTestReporter(buf, map[string]struct{}{interPin: {}})
 
-	// The pinned intermediate appears ONLY in the second verified chain;
-	// the outer loop must still find it → silent match.
+	// The pinned intermediate appears ONLY in the second verified chain; the outer loop must still find it → silent match.
 	chains := [][]*x509.Certificate{
 		{makeLeaf(t), makeLeaf(t)},  // unrelated cross-signed path
 		{makeLeaf(t), intermediate}, // path carrying the pinned WE1
@@ -244,12 +228,7 @@ func TestInspectMultiChainMatchAndEmptyGuard(t *testing.T) {
 	}
 }
 
-// TestExpectedSPKIPinsWellFormed guards the hand-pasted production pin
-// set against a typo: every key must be valid standard base64 that
-// decodes to exactly 32 bytes (a SHA-256 digest). A malformed entry
-// would silently never match any real cert, turning the report-only
-// pinning into a permanent false "mismatch" — caught here at build/CI
-// instead of in the field.
+// TestExpectedSPKIPinsWellFormed guards the hand-pasted production pin set against a typo: every key must be valid standard base64 that decodes to exactly 32 bytes (a SHA-256 digest). A malformed entry would silently never match any real cert, turning the report-only pinning into a permanent false "mismatch" — caught here at build/CI instead of in the field.
 func TestExpectedSPKIPinsWellFormed(t *testing.T) {
 	if len(expectedSPKIPins) == 0 {
 		t.Fatal("expectedSPKIPins is empty — the live leaf pins must be populated")

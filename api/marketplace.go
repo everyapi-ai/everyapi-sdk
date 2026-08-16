@@ -10,9 +10,7 @@ import (
 
 // --- demand ----------------------------------------------------------
 
-// Demand mirrors backend model.Demand — the buyer-side "I want
-// model X under conditions Y at price ceiling Z" posting in the
-// marketplace.
+// Demand mirrors backend model.Demand — the buyer-side "I want model X under conditions Y at price ceiling Z" posting in the marketplace.
 type Demand struct {
 	ID                        int    `json:"id"`
 	UserID                    int    `json:"user_id"`
@@ -31,9 +29,7 @@ type Demand struct {
 	State                     string `json:"state"`
 }
 
-// DemandSubmit is the POST /api/demand payload. MaxPricePerMTokenUSD
-// is a float in dollars-per-1M-tokens; the backend converts to the
-// internal quota unit on the server side.
+// DemandSubmit is the POST /api/demand payload. MaxPricePerMTokenUSD is a float in dollars-per-1M-tokens; the backend converts to the internal quota unit on the server side.
 type DemandSubmit struct {
 	Title                string  `json:"title"`
 	ModelName            string  `json:"model_name"`
@@ -57,8 +53,7 @@ func demandPage(qs url.Values, page, pageSize int) url.Values {
 	return qs
 }
 
-// ListPublicDemands reads the marketplace feed. state defaults to
-// "open" server-side when empty.
+// ListPublicDemands reads the marketplace feed. state defaults to "open" server-side when empty.
 func (c *Client) ListPublicDemands(ctx context.Context, state string, page, pageSize int) ([]Demand, int, error) {
 	v := url.Values{}
 	if state != "" {
@@ -262,9 +257,7 @@ func (c *Client) GetDispute(ctx context.Context, id int) (*Dispute, error) {
 
 // --- abuse report ----------------------------------------------------
 
-// AbuseReportSubmit is the POST /api/abuse-report payload. Public
-// endpoint — works without auth (TryUserAuth), so the SDK doesn't
-// require a credential for this call alone.
+// AbuseReportSubmit is the POST /api/abuse-report payload. Public endpoint — works without auth (TryUserAuth), so the SDK doesn't require a credential for this call alone.
 type AbuseReportSubmit struct {
 	ReporterEmail string `json:"reporter_email"`
 	Category      string `json:"category"`

@@ -8,9 +8,7 @@ import (
 	"strconv"
 )
 
-// TopUp is one row from the buyer's payment history. Mirrors
-// backend model.TopUp. Status values are free-form strings ("done",
-// "pending", etc.); the CLI just surfaces them.
+// TopUp is one row from the buyer's payment history. Mirrors backend model.TopUp. Status values are free-form strings ("done", "pending", etc.); the CLI just surfaces them.
 type TopUp struct {
 	ID              int     `json:"id"`
 	UserID          int     `json:"user_id"`
@@ -24,11 +22,7 @@ type TopUp struct {
 	Status          string  `json:"status"`
 }
 
-// TopupInfo is the high-value subset of /api/user/topup/info. The
-// wallet config grows frequently (new payment providers land
-// without warning) so the SDK keeps the known-stable fields typed
-// and stashes the rest in Raw for callers that need the bleeding
-// edge without an SDK bump.
+// TopupInfo is the high-value subset of /api/user/topup/info. The wallet config grows frequently (new payment providers land without warning) so the SDK keeps the known-stable fields typed and stashes the rest in Raw for callers that need the bleeding edge without an SDK bump.
 type TopupInfo struct {
 	EnableFluxaTopup bool                `json:"enable_fluxa_topup"`
 	MinTopup         int                 `json:"min_topup"`
@@ -55,9 +49,7 @@ func (c *Client) GetTopupInfo(ctx context.Context) (*TopupInfo, error) {
 	return &env.Data, nil
 }
 
-// ListUserTopups returns one page of the caller's payment history.
-// keyword is optional (server-side substring search across trade
-// numbers and notes). Returns items + total for the filter.
+// ListUserTopups returns one page of the caller's payment history. keyword is optional (server-side substring search across trade numbers and notes). Returns items + total for the filter.
 func (c *Client) ListUserTopups(ctx context.Context, page, pageSize int, keyword string) ([]TopUp, int, error) {
 	v := url.Values{}
 	if page > 0 {
@@ -90,10 +82,7 @@ func (c *Client) ListUserTopups(ctx context.Context, page, pageSize int, keyword
 	return env.Data.Items, env.Data.Total, nil
 }
 
-// Redeem applies a redemption / topup key to the caller's account
-// and returns the quota awarded. Backend serialises concurrent
-// redemptions per user, so a hammered key can briefly 200 with
-// the "topup processing" message — caller may retry with backoff.
+// Redeem applies a redemption / topup key to the caller's account and returns the quota awarded. Backend serialises concurrent redemptions per user, so a hammered key can briefly 200 with the "topup processing" message — caller may retry with backoff.
 func (c *Client) Redeem(ctx context.Context, key string) (int64, error) {
 	if key == "" {
 		return 0, fmt.Errorf("redeem: empty key")

@@ -1,10 +1,4 @@
-// Token-usage SDK: GET /api/usage/token. Unlike every other call in
-// this package it authenticates with the RELAY KEY itself
-// (middleware.TokenAuthReadOnly), not the login session — construct
-// the Client with the key as the bearer (api.New(base, key)) and do
-// NOT attach a user id. This is the one endpoint a bare key-holder
-// (no dashboard account) can hit to see how much quota the key has
-// left.
+// Token-usage SDK: GET /api/usage/token. Unlike every other call in this package it authenticates with the RELAY KEY itself (middleware.TokenAuthReadOnly), not the login session — construct the Client with the key as the bearer (api.New(base, key)) and do NOT attach a user id. This is the one endpoint a bare key-holder (no dashboard account) can hit to see how much quota the key has left.
 package api
 
 import (
@@ -12,9 +6,7 @@ import (
 	"errors"
 )
 
-// TokenUsage mirrors the GET /api/usage/token payload. Quota fields
-// are in internal quota units — divide by QuotaPerUnit to get USD.
-// ExpiresAt is unix seconds; 0 means "never expires".
+// TokenUsage mirrors the GET /api/usage/token payload. Quota fields are in internal quota units — divide by QuotaPerUnit to get USD. ExpiresAt is unix seconds; 0 means "never expires".
 type TokenUsage struct {
 	Object             string          `json:"object"`
 	Name               string          `json:"name"`
@@ -27,25 +19,16 @@ type TokenUsage struct {
 	ExpiresAt          int64           `json:"expires_at"`
 }
 
-// GetTokenUsage reads GET /api/usage/token. The Client's bearer token
-// must be the relay key whose usage you want (api.New(base, key)); no
-// login session or EveryAPI-User-Id header is required.
+// GetTokenUsage reads GET /api/usage/token. The Client's bearer token must be the relay key whose usage you want (api.New(base, key)); no login session or EveryAPI-User-Id header is required.
 //
-// The endpoint hand-rolls its envelope with "code" (bool), NOT the
-// standard "success" field every other handler uses — decode it as
-// such so a logical failure (banned/unknown key) surfaces the message
-// instead of a zero-valued struct.
+// The endpoint hand-rolls its envelope with "code" (bool), NOT the standard "success" field every other handler uses — decode it as such so a logical failure (banned/unknown key) surfaces the message instead of a zero-valued struct.
 func (c *Client) GetTokenUsage(ctx context.Context) (*TokenUsage, error) {
 	var env struct {
 		Code    bool       `json:"code"`
 		Message string     `json:"message"`
 		Data    TokenUsage `json:"data"`
 	}
-	// Trailing slash: the route is registered as GET "/" inside the
-	// /api/usage/token group, matching the /api/user/ convention used
-	// elsewhere in this package. Hitting it without the slash relies
-	// on a 301 redirect that some proxies strip the Authorization
-	// header across.
+	// Trailing slash: the route is registered as GET "/" inside the /api/usage/token group, matching the /api/user/ convention used elsewhere in this package. Hitting it without the slash relies on a 301 redirect that some proxies strip the Authorization header across.
 	if err := c.do(ctx, "GET", "/api/usage/token/", nil, &env); err != nil {
 		return nil, err
 	}

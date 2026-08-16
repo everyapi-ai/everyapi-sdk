@@ -11,10 +11,7 @@ import (
 	"time"
 )
 
-// TestStartSellerCodexOAuth_HappyPath: starts a flow, checks the
-// envelope-mapping is correct (verification_uri / user_code /
-// flow_id / interval propagate). Also asserts the request method +
-// path so the CLI doesn't silently send to the wrong endpoint.
+// TestStartSellerCodexOAuth_HappyPath: starts a flow, checks the envelope-mapping is correct (verification_uri / user_code / flow_id / interval propagate). Also asserts the request method + path so the CLI doesn't silently send to the wrong endpoint.
 func TestStartSellerCodexOAuth_HappyPath(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" || r.URL.Path != "/api/seller/codex/device/start" {
@@ -44,9 +41,7 @@ func TestStartSellerCodexOAuth_HappyPath(t *testing.T) {
 	}
 }
 
-// TestSellerCodexPoll_StateClassification: the CLI poll loop branches
-// on State, so the wire-to-State mapping has to be airtight for each
-// of pending / slow_down / expired / denied / authorized.
+// TestSellerCodexPoll_StateClassification: the CLI poll loop branches on State, so the wire-to-State mapping has to be airtight for each of pending / slow_down / expired / denied / authorized.
 func TestSellerCodexPoll_StateClassification(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -87,10 +82,7 @@ func TestSellerCodexPoll_StateClassification(t *testing.T) {
 	}
 }
 
-// TestPollSellerCodexUntilDone_SuccessAfterPending: walks the poll
-// loop through one pending tick then an authorized response, asserts
-// the loop returns the authorized payload. Uses interval=1 so the
-// test isn't slow.
+// TestPollSellerCodexUntilDone_SuccessAfterPending: walks the poll loop through one pending tick then an authorized response, asserts the loop returns the authorized payload. Uses interval=1 so the test isn't slow.
 func TestPollSellerCodexUntilDone_SuccessAfterPending(t *testing.T) {
 	var hits int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -145,13 +137,7 @@ func TestPollSellerCodexUntilDone_DeniedSentinel(t *testing.T) {
 	}
 }
 
-// TestPollSellerCodexUntilDone_5xxBailsImmediately: a backend 5xx is
-// a definitive server-side error (gateway timeout, panic, db down).
-// The poll loop's transient-retry budget exists for socket-level
-// blips, NOT for the server actively saying "no" — keep retrying
-// would just hammer a broken backend. The *APIError fast-path in
-// PollSellerCodexUntilDone must therefore return the first 5xx
-// without falling into the retry loop.
+// TestPollSellerCodexUntilDone_5xxBailsImmediately: a backend 5xx is a definitive server-side error (gateway timeout, panic, db down). The poll loop's transient-retry budget exists for socket-level blips, NOT for the server actively saying "no" — keep retrying would just hammer a broken backend. The *APIError fast-path in PollSellerCodexUntilDone must therefore return the first 5xx without falling into the retry loop.
 func TestPollSellerCodexUntilDone_5xxBailsImmediately(t *testing.T) {
 	var hits int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -167,9 +153,7 @@ func TestPollSellerCodexUntilDone_5xxBailsImmediately(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error on persistent 5xx")
 	}
-	// IsUnauthorized would be false; we just need *APIError, which the
-	// poll loop's `errors.As(err, new(*APIError))` already short-circuits
-	// on. Counter check: exactly one server hit (no retry).
+	// IsUnauthorized would be false; we just need *APIError, which the poll loop's `errors.As(err, new(*APIError))` already short-circuits on. Counter check: exactly one server hit (no retry).
 	if got := atomic.LoadInt32(&hits); got != 1 {
 		t.Errorf("server hits = %d, want 1 — a 5xx must not be retried", got)
 	}
@@ -179,11 +163,7 @@ func TestPollSellerCodexUntilDone_5xxBailsImmediately(t *testing.T) {
 	}
 }
 
-// TestSellerCodexPoll_UnknownCodeIsError: backend's switch-default
-// surfaces an unknown poll status as a non-success envelope with no
-// recognised `code`. The CLI must NOT treat this as "keep polling"
-// (would loop forever) or "authorized" (would attempt to read a
-// zero channel id). It must error out so the user sees the failure.
+// TestSellerCodexPoll_UnknownCodeIsError: backend's switch-default surfaces an unknown poll status as a non-success envelope with no recognised `code`. The CLI must NOT treat this as "keep polling" (would loop forever) or "authorized" (would attempt to read a zero channel id). It must error out so the user sees the failure.
 func TestSellerCodexPoll_UnknownCodeIsError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -197,11 +177,7 @@ func TestSellerCodexPoll_UnknownCodeIsError(t *testing.T) {
 	}
 }
 
-// TestWithCookieJar_PersistsCookiesAcrossCalls: the OAuth flow's
-// /poll endpoint depends on the cookie set by /start. Drop the jar
-// and the second call lands in a fresh session — verify the jar is
-// actually doing its job by checking the second request carries the
-// cookie the first response set.
+// TestWithCookieJar_PersistsCookiesAcrossCalls: the OAuth flow's /poll endpoint depends on the cookie set by /start. Drop the jar and the second call lands in a fresh session — verify the jar is actually doing its job by checking the second request carries the cookie the first response set.
 func TestWithCookieJar_PersistsCookiesAcrossCalls(t *testing.T) {
 	var secondCallSawCookie bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

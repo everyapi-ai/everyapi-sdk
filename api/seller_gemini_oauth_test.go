@@ -31,8 +31,7 @@ func TestStartSellerGeminiOAuth_HappyPath(t *testing.T) {
 
 func TestStartSellerGeminiOAuth_SurfacesValidationError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		// Matches the backend's loopback validator output — making the
-		// substring assertion below resilient to message phrasing tweaks.
+		// Matches the backend's loopback validator output — making the substring assertion below resilient to message phrasing tweaks.
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		io.WriteString(w, `{"success":false,"message":"redirect_uri: host must be 127.0.0.1 or localhost"}`)
@@ -77,10 +76,7 @@ func TestCompleteSellerGeminiOAuth_StateMismatch(t *testing.T) {
 	}
 }
 
-// TestGeminiOAuth_CookieJarReplaysAcrossStartAndComplete: same
-// guarantee as the codex/claude versions — start/complete have to
-// land in the same session, which only happens if the cookie jar
-// replays the session cookie set by /start.
+// TestGeminiOAuth_CookieJarReplaysAcrossStartAndComplete: same guarantee as the codex/claude versions — start/complete have to land in the same session, which only happens if the cookie jar replays the session cookie set by /start.
 func TestGeminiOAuth_CookieJarReplaysAcrossStartAndComplete(t *testing.T) {
 	var completeSawCookie bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

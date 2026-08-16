@@ -6,38 +6,18 @@ import (
 	"sort"
 )
 
-// maxCarry bounds how many tail bytes a streaming restorer will hold
-// back waiting for a placeholder to finish arriving. A real placeholder
-// is a few dozen bytes; an unterminated prefix that grows past this is
-// treated as ordinary text and flushed rather than buffered unbounded (a
-// malicious/buggy upstream could otherwise OOM the proxy).
+// maxCarry bounds how many tail bytes a streaming restorer will hold back waiting for a placeholder to finish arriving. A real placeholder is a few dozen bytes; an unterminated prefix that grows past this is treated as ordinary text and flushed rather than buffered unbounded (a malicious/buggy upstream could otherwise OOM the proxy).
 const maxCarry = 1024
 
-// maxFrameBytes bounds the raw event-frame accumulator. An upstream that
-// never emits an event boundary (\n\n) would otherwise grow r.frame without
-// limit; past this we flush the buffered bytes and reset rather than OOM.
+// maxFrameBytes bounds the raw event-frame accumulator. An upstream that never emits an event boundary (\n\n) would otherwise grow r.frame without limit; past this we flush the buffered bytes and reset rather than OOM.
 const maxFrameBytes = 4 << 20 // 4 MiB
 
-// geminiPartStride spaces out the per-(candidate,part) carryover slot keys
-// for Gemini events so two text parts in one candidate — or multiple
-// candidates that omit the index field — never collide in the pending/tmpl
-// maps. A candidate realistically never holds 65536 parts.
+// geminiPartStride spaces out the per-(candidate,part) carryover slot keys for Gemini events so two text parts in one candidate — or multiple candidates that omit the index field — never collide in the pending/tmpl maps. A candidate realistically never holds 65536 parts.
 const geminiPartStride = 1 << 16
 
-// SSERestorer is a structure-aware Server-Sent-Events restorer. It
-// reframes the line-oriented `data: {json}\n\n` event stream, decodes
-// each event's JSON, and restores placeholders on the DECODED text of
-// human-display deltas — never on tool-argument deltas (P3). Restoring
-// on the decoded value (rather than the raw wire bytes) is what makes it
-// immune to the gateway's JSON HTML-escaping of the placeholder brackets,
-// and re-encoding each modified delta with HTML escaping off is what lets
-// a restored multi-line/quote-bearing secret round-trip without breaking
-// the JSON or the SSE framing.
+// SSERestorer is a structure-aware Server-Sent-Events restorer. It reframes the line-oriented `data: {json}\n\n` event stream, decodes each event's JSON, and restores placeholders on the DECODED text of human-display deltas — never on tool-argument deltas (P3). Restoring on the decoded value (rather than the raw wire bytes) is what makes it immune to the gateway's JSON HTML-escaping of the placeholder brackets, and re-encoding each modified delta with HTML escaping off is what lets a restored multi-line/quote-bearing secret round-trip without breaking the JSON or the SSE framing.
 //
-// A placeholder split across multiple delta events is reassembled by
-// keeping a per-content-block decoded-text carryover (pending), so the
-// confirmed split-across-events leak is closed. Events with no resolvable
-// placeholder pass through byte-for-byte.
+// A placeholder split across multiple delta events is reassembled by keeping a per-content-block decoded-text carryover (pending), so the confirmed split-across-events leak is closed. Events with no resolvable placeholder pass through byte-for-byte.
 type SSERestorer struct {
 	m       *Mapping
 	frame   []byte                      // accumulated raw bytes awaiting an event boundary
@@ -54,8 +34,7 @@ func NewSSERestorer(m *Mapping) *SSERestorer {
 	}
 }
 
-// Write feeds a chunk of the upstream SSE stream and returns the bytes
-// safe to forward to the SDK now. Internal state carries across calls.
+// Write feeds a chunk of the upstream SSE stream and returns the bytes safe to forward to the SDK now. Internal state carries across calls.
 func (r *SSERestorer) Write(p []byte) []byte {
 	r.frame = append(r.frame, p...)
 	var out []byte
@@ -68,11 +47,7 @@ func (r *SSERestorer) Write(p []byte) []byte {
 		r.frame = r.frame[end:]
 		out = append(out, r.processRawEvent(raw)...)
 	}
-	// Bound the accumulator: an upstream that never emits an event boundary
-	// (\n\n) would otherwise grow r.frame without limit and OOM the proxy.
-	// Past the cap, forward the buffered bytes as-is — there's no event
-	// structure to safely restore, so leaving placeholders is the safe
-	// direction — and reset.
+	// Bound the accumulator: an upstream that never emits an event boundary (\n\n) would otherwise grow r.frame without limit and OOM the proxy. Past the cap, forward the buffered bytes as-is — there's no event structure to safely restore, so leaving placeholders is the safe direction — and reset.
 	if len(r.frame) > maxFrameBytes {
 		out = append(out, r.frame...)
 		r.frame = r.frame[:0]
@@ -80,8 +55,7 @@ func (r *SSERestorer) Write(p []byte) []byte {
 	return out
 }
 
-// Final flushes any held per-block tails followed by any trailing
-// incomplete event bytes once the upstream has closed.
+// Final flushes any held per-block tails followed by any trailing incomplete event bytes once the upstream has closed.
 func (r *SSERestorer) Final() []byte {
 	out := r.flushAll()
 	if len(r.frame) > 0 {
@@ -91,9 +65,7 @@ func (r *SSERestorer) Final() []byte {
 	return out
 }
 
-// nextEventBoundary returns the byte offset just past the first SSE event
-// terminator (blank line) in b, or -1 if no complete event is buffered.
-// Handles both LF and CRLF framing.
+// nextEventBoundary returns the byte offset just past the first SSE event terminator (blank line) in b, or -1 if no complete event is buffered. Handles both LF and CRLF framing.
 func nextEventBoundary(b []byte) int {
 	i1 := bytes.Index(b, []byte("\n\n"))
 	i2 := bytes.Index(b, []byte("\r\n\r\n"))
@@ -111,8 +83,7 @@ func nextEventBoundary(b []byte) int {
 	}
 }
 
-// processRawEvent parses one complete event (including its terminator),
-// extracts the event name + data payload, and returns the bytes to emit.
+// processRawEvent parses one complete event (including its terminator), extracts the event name + data payload, and returns the bytes to emit.
 func (r *SSERestorer) processRawEvent(raw []byte) []byte {
 	var eventName string
 	var dataParts [][]byte
@@ -142,20 +113,13 @@ func (r *SSERestorer) processRawEvent(raw []byte) []byte {
 	return r.processEvent(eventName, data, raw)
 }
 
-// processEvent restores display-text deltas in one event and returns the
-// bytes to emit. Returns the original raw event unchanged when nothing is
-// modified.
+// processEvent restores display-text deltas in one event and returns the bytes to emit. Returns the original raw event unchanged when nothing is modified.
 func (r *SSERestorer) processEvent(eventName string, data, raw []byte) []byte {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
 	var obj map[string]any
 	if err := dec.Decode(&obj); err != nil {
-		// Data isn't a JSON object: OpenAI's [DONE] sentinel, a keepalive,
-		// or unstructured SSE text. Flush any held block tails first, then
-		// restore raw placeholders in the (non-JSON) payload — this is
-		// display text with no structure to scope, so restoring is the
-		// safe direction. A complete placeholder splices cleanly because
-		// the payload isn't JSON (no escaping to honour).
+		// Data isn't a JSON object: OpenAI's [DONE] sentinel, a keepalive, or unstructured SSE text. Flush any held block tails first, then restore raw placeholders in the (non-JSON) payload — this is display text with no structure to scope, so restoring is the safe direction. A complete placeholder splices cleanly because the payload isn't JSON (no escaping to honour).
 		flushed := r.flushAll()
 		if restored, changed := restoreInText(string(data), r.m); changed {
 			return append(flushed, renderEvent(eventName, []byte(restored))...)
@@ -163,8 +127,7 @@ func (r *SSERestorer) processEvent(eventName string, data, raw []byte) []byte {
 		return append(flushed, raw...)
 	}
 
-	// A block ending: flush its held tail before the stop event so the
-	// carryover is never dropped.
+	// A block ending: flush its held tail before the stop event so the carryover is never dropped.
 	if t, _ := obj["type"].(string); t == "content_block_stop" {
 		flushed := r.flushBlock(jsonInt(obj["index"]))
 		return append(flushed, raw...)
@@ -172,8 +135,7 @@ func (r *SSERestorer) processEvent(eventName string, data, raw []byte) []byte {
 
 	slots := displaySlots(obj)
 	if len(slots) == 0 {
-		// No human-display text (tool-arg deltas, ping, message framing).
-		// Forward verbatim — including tool-argument sinks (P3).
+		// No human-display text (tool-arg deltas, ping, message framing). Forward verbatim — including tool-argument sinks (P3).
 		return raw
 	}
 
@@ -210,9 +172,7 @@ func (r *SSERestorer) processEvent(eventName string, data, raw []byte) []byte {
 	return renderEvent(eventName, js)
 }
 
-// saveTemplate records how to synthesise a flush event for a block: re-
-// render the most recent display-delta event for that block with a given
-// text. Used to emit a held tail at block-stop / stream-end.
+// saveTemplate records how to synthesise a flush event for a block: re- render the most recent display-delta event for that block with a given text. Used to emit a held tail at block-stop / stream-end.
 func (r *SSERestorer) saveTemplate(idx int, eventName string, obj map[string]any, set func(string)) {
 	r.tmpl[idx] = func(text string) []byte {
 		set(text)
@@ -224,8 +184,7 @@ func (r *SSERestorer) saveTemplate(idx int, eventName string, obj map[string]any
 	}
 }
 
-// flushBlock emits any held tail for a single block (as a synthetic
-// display delta) and clears it.
+// flushBlock emits any held tail for a single block (as a synthetic display delta) and clears it.
 func (r *SSERestorer) flushBlock(idx int) []byte {
 	carry := r.pending[idx]
 	if carry == "" {
@@ -255,8 +214,7 @@ func (r *SSERestorer) flushAll() []byte {
 	return out
 }
 
-// renderEvent reconstructs an SSE event from an (optional) event name
-// and a data payload.
+// renderEvent reconstructs an SSE event from an (optional) event name and a data payload.
 func renderEvent(name string, dataJSON []byte) []byte {
 	var b []byte
 	if name != "" {
@@ -270,20 +228,14 @@ func renderEvent(name string, dataJSON []byte) []byte {
 	return b
 }
 
-// textSlot is one human-display text field inside a decoded SSE event,
-// keyed by its content-block / choice index, with accessors to read and
-// rewrite it in place.
+// textSlot is one human-display text field inside a decoded SSE event, keyed by its content-block / choice index, with accessors to read and rewrite it in place.
 type textSlot struct {
 	idx int
 	get func() string
 	set func(string)
 }
 
-// displaySlots returns the human-display text fields of a decoded SSE
-// event — Anthropic text_delta / thinking_delta and OpenAI
-// choices[].delta.content. Tool-argument deltas (input_json_delta,
-// tool_calls) are deliberately NOT returned, so they pass through
-// verbatim and never get a real secret restored into them (P3).
+// displaySlots returns the human-display text fields of a decoded SSE event — Anthropic text_delta / thinking_delta and OpenAI choices[].delta.content. Tool-argument deltas (input_json_delta, tool_calls) are deliberately NOT returned, so they pass through verbatim and never get a real secret restored into them (P3).
 func displaySlots(obj map[string]any) []textSlot {
 	var slots []textSlot
 
@@ -335,9 +287,7 @@ func displaySlots(obj map[string]any) []textSlot {
 		}
 	}
 
-	// Gemini streamGenerateContent: candidates[].content.parts[].text. Skip
-	// parts carrying a functionCall — that's the tool-arg sink (P3), handled
-	// like Anthropic input_json_delta / OpenAI tool_calls (never restored).
+	// Gemini streamGenerateContent: candidates[].content.parts[].text. Skip parts carrying a functionCall — that's the tool-arg sink (P3), handled like Anthropic input_json_delta / OpenAI tool_calls (never restored).
 	if cands, ok := obj["candidates"].([]any); ok {
 		for ci, c := range cands {
 			cm, ok := c.(map[string]any)
@@ -362,14 +312,7 @@ func displaySlots(obj map[string]any) []textSlot {
 				}
 				if _, ok := pm["text"].(string); ok {
 					d := pm
-					// Carryover slot key MUST be unique per (candidate, part):
-					// a single event can carry two text parts in one candidate
-					// (thought + answer), and multiple candidates often omit the
-					// index field — keying by the index field alone collapses
-					// them to one slot and bleeds one part's split-placeholder
-					// tail into another. Use array positions (stable across
-					// chunks). Gemini has no content_block_stop, so these flush
-					// at stream end via flushAll.
+					// Carryover slot key MUST be unique per (candidate, part): a single event can carry two text parts in one candidate (thought + answer), and multiple candidates often omit the index field — keying by the index field alone collapses them to one slot and bleeds one part's split-placeholder tail into another. Use array positions (stable across chunks). Gemini has no content_block_stop, so these flush at stream end via flushAll.
 					slots = append(slots, textSlot{
 						idx: ci*geminiPartStride + pi,
 						get: func() string { s, _ := d["text"].(string); return s },
@@ -382,8 +325,7 @@ func displaySlots(obj map[string]any) []textSlot {
 	return slots
 }
 
-// jsonInt coerces a decoded JSON number (json.Number or float64) to an
-// int, defaulting to 0 (the common single-block / single-choice index).
+// jsonInt coerces a decoded JSON number (json.Number or float64) to an int, defaulting to 0 (the common single-block / single-choice index).
 func jsonInt(v any) int {
 	switch n := v.(type) {
 	case json.Number:

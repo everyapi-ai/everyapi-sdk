@@ -1,9 +1,4 @@
-// OAuth 2.0 Device Authorization Grant (RFC 8628) against the gateway's
-// first-party OAuth2 provider (/api/oauth2/*). Unlike the legacy
-// /api/cli/device-auth-* flow — which returns a management access_token the
-// CLI trades for a relay key — the OAuth2 access_token IS the relay key
-// (sk-everyapi-…). It carries no management session, so the CLI only falls
-// back to this flow when the legacy endpoints are absent.
+// OAuth 2.0 Device Authorization Grant (RFC 8628) against the gateway's first-party OAuth2 provider (/api/oauth2/*). Unlike the legacy /api/cli/device-auth-* flow — which returns a management access_token the CLI trades for a relay key — the OAuth2 access_token IS the relay key (sk-everyapi-…). It carries no management session, so the CLI only falls back to this flow when the legacy endpoints are absent.
 package api
 
 import (
@@ -17,9 +12,7 @@ import (
 	"time"
 )
 
-// ErrOAuth2Unavailable signals that the gateway has no usable OAuth2 device
-// grant (routes absent, or the client id isn't recognized), so the caller
-// should use the legacy device-auth flow instead.
+// ErrOAuth2Unavailable signals that the gateway has no usable OAuth2 device grant (routes absent, or the client id isn't recognized), so the caller should use the legacy device-auth flow instead.
 var ErrOAuth2Unavailable = errors.New("oauth2 device flow unavailable")
 
 const oauth2DeviceGrant = "urn:ietf:params:oauth:grant-type:device_code"
@@ -37,17 +30,14 @@ type oauth2Resp struct {
 	ErrorDescription        string `json:"error_description"`
 }
 
-// OAuth2Token is the result of an OAuth2 device grant or refresh: the issued
-// relay key plus its renewal material. RefreshToken/ExpiresAt are empty/zero
-// when the gateway issues a non-expiring key.
+// OAuth2Token is the result of an OAuth2 device grant or refresh: the issued relay key plus its renewal material. RefreshToken/ExpiresAt are empty/zero when the gateway issues a non-expiring key.
 type OAuth2Token struct {
 	AccessToken  string
 	RefreshToken string
 	ExpiresAt    int64 // unix seconds; 0 = unknown / non-expiring
 }
 
-// oauth2TokenFrom turns a successful /oauth2/token body into an OAuth2Token,
-// resolving expires_in (seconds-from-now) to an absolute unix deadline.
+// oauth2TokenFrom turns a successful /oauth2/token body into an OAuth2Token, resolving expires_in (seconds-from-now) to an absolute unix deadline.
 func oauth2TokenFrom(r *oauth2Resp) *OAuth2Token {
 	var expiresAt int64
 	if r.ExpiresIn > 0 {
@@ -63,8 +53,7 @@ func oauth2Msg(r *oauth2Resp) string {
 	return r.Error
 }
 
-// oauth2Form POSTs a form-encoded request and parses the JSON body (OAuth2
-// errors are JSON too). Returns the HTTP status so callers can detect a 404.
+// oauth2Form POSTs a form-encoded request and parses the JSON body (OAuth2 errors are JSON too). Returns the HTTP status so callers can detect a 404.
 func (c *Client) oauth2Form(ctx context.Context, path string, form url.Values) (*oauth2Resp, int, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", c.base+path, strings.NewReader(form.Encode()))
 	if err != nil {
@@ -85,9 +74,7 @@ func (c *Client) oauth2Form(ctx context.Context, path string, form url.Values) (
 	return &out, resp.StatusCode, nil
 }
 
-// OAuth2DeviceStart begins a device flow at /api/oauth2/device. Returns
-// ErrOAuth2Unavailable when the route is missing or the client isn't
-// recognized, so the caller can fall back to the legacy flow.
+// OAuth2DeviceStart begins a device flow at /api/oauth2/device. Returns ErrOAuth2Unavailable when the route is missing or the client isn't recognized, so the caller can fall back to the legacy flow.
 func (c *Client) OAuth2DeviceStart(ctx context.Context, clientID string) (*DeviceAuthStartResp, error) {
 	r, status, err := c.oauth2Form(ctx, "/api/oauth2/device", url.Values{
 		"client_id": {clientID},
@@ -102,9 +89,7 @@ func (c *Client) OAuth2DeviceStart(ctx context.Context, clientID string) (*Devic
 	if r.Error != "" {
 		return nil, &APIError{StatusCode: status, Message: oauth2Msg(r)}
 	}
-	// A transient non-2xx (5xx, proxy hiccup) parses to an empty body — surface
-	// it as a real error rather than mis-reading it as "oauth2 unavailable" and
-	// silently downgrading to the legacy flow.
+	// A transient non-2xx (5xx, proxy hiccup) parses to an empty body — surface it as a real error rather than mis-reading it as "oauth2 unavailable" and silently downgrading to the legacy flow.
 	if status/100 != 2 {
 		return nil, &APIError{StatusCode: status, Message: fmt.Sprintf("oauth2 device: HTTP %d", status)}
 	}
@@ -124,11 +109,7 @@ func (c *Client) OAuth2DeviceStart(ctx context.Context, clientID string) (*Devic
 	}, nil
 }
 
-// OAuth2PollUntilDone polls /api/oauth2/token until the user approves and
-// returns the issued relay key (the access_token is itself an sk-everyapi-
-// key) plus its refresh token + expiry for later renewal. Mirrors the legacy
-// poll loop: adaptive interval, slow_down backoff, a small transient-error
-// budget, and the same terminal sentinels.
+// OAuth2PollUntilDone polls /api/oauth2/token until the user approves and returns the issued relay key (the access_token is itself an sk-everyapi- key) plus its refresh token + expiry for later renewal. Mirrors the legacy poll loop: adaptive interval, slow_down backoff, a small transient-error budget, and the same terminal sentinels.
 func (c *Client) OAuth2PollUntilDone(ctx context.Context, clientID, deviceCode string, initialIntervalSecs int) (*OAuth2Token, error) {
 	interval := time.Duration(initialIntervalSecs) * time.Second
 	if interval <= 0 {
@@ -174,10 +155,7 @@ func (c *Client) OAuth2PollUntilDone(ctx context.Context, clientID, deviceCode s
 	}
 }
 
-// OAuth2Refresh exchanges a refresh token for a fresh relay key
-// (grant_type=refresh_token). Returns the new token bundle; the gateway may
-// rotate the refresh token or omit it (reuse the old one then). The request is
-// unauthenticated beyond the client id + refresh token, so no bearer is needed.
+// OAuth2Refresh exchanges a refresh token for a fresh relay key (grant_type=refresh_token). Returns the new token bundle; the gateway may rotate the refresh token or omit it (reuse the old one then). The request is unauthenticated beyond the client id + refresh token, so no bearer is needed.
 func (c *Client) OAuth2Refresh(ctx context.Context, clientID, refreshToken string) (*OAuth2Token, error) {
 	r, status, err := c.oauth2Form(ctx, "/api/oauth2/token", url.Values{
 		"grant_type":    {"refresh_token"},

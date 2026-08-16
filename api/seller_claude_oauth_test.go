@@ -72,9 +72,7 @@ func TestCompleteSellerClaudeOAuth_HappyPath(t *testing.T) {
 	}
 }
 
-// TestCompleteSellerClaudeOAuth_StateMismatch — backend surfaces this
-// as success:false with a specific message. The CLI must propagate
-// it verbatim so the user knows to retry with a fresh /start.
+// TestCompleteSellerClaudeOAuth_StateMismatch — backend surfaces this as success:false with a specific message. The CLI must propagate it verbatim so the user knows to retry with a fresh /start.
 func TestCompleteSellerClaudeOAuth_StateMismatch(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -88,11 +86,7 @@ func TestCompleteSellerClaudeOAuth_StateMismatch(t *testing.T) {
 	}
 }
 
-// Cookie-jar smoke test — claude flow is start→complete in the same
-// CLI invocation, same session cookie requirement as codex. Already
-// covered by TestWithCookieJar_PersistsCookiesAcrossCalls in
-// seller_oauth_test.go but redo it through the claude endpoints in
-// case the codex path is later refactored.
+// Cookie-jar smoke test — claude flow is start→complete in the same CLI invocation, same session cookie requirement as codex. Already covered by TestWithCookieJar_PersistsCookiesAcrossCalls in seller_oauth_test.go but redo it through the claude endpoints in case the codex path is later refactored.
 func TestClaudeOAuth_CookieJarReplaysAcrossStartAndComplete(t *testing.T) {
 	var completeSawCookie bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

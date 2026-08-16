@@ -1,11 +1,6 @@
-// Notification-settings SDK: read / write the user's quota-warning
-// notification channel (PUT /api/user/setting, POST /api/user/setting/test).
+// Notification-settings SDK: read / write the user's quota-warning notification channel (PUT /api/user/setting, POST /api/user/setting/test).
 //
-// IMPORTANT: the backend rebuilds the whole UserSetting blob on each
-// PUT, so this endpoint must be paired with the backend fix that
-// inherits the non-notify fields (sidebar / language / seller-mode /
-// marketplace opt-in) from the stored setting — otherwise saving a
-// channel wipes them. See the matching backend change.
+// IMPORTANT: the backend rebuilds the whole UserSetting blob on each PUT, so this endpoint must be paired with the backend fix that inherits the non-notify fields (sidebar / language / seller-mode / marketplace opt-in) from the stored setting — otherwise saving a channel wipes them. See the matching backend change.
 package api
 
 import (
@@ -15,9 +10,7 @@ import (
 	"fmt"
 )
 
-// NotifySettingView is the notification subset parsed out of the user's
-// setting blob (GetSelf's "setting" field). Empty NotifyType means no
-// channel has been configured yet.
+// NotifySettingView is the notification subset parsed out of the user's setting blob (GetSelf's "setting" field). Empty NotifyType means no channel has been configured yet.
 type NotifySettingView struct {
 	NotifyType            string  `json:"notify_type"`
 	QuotaWarningThreshold float64 `json:"quota_warning_threshold"`
@@ -29,10 +22,7 @@ type NotifySettingView struct {
 	GotifyPriority        int     `json:"gotify_priority"`
 }
 
-// GetNotifySetting reads the current notification config by parsing the
-// "setting" blob returned by GET /api/user/self. A malformed blob
-// yields a zero-value view rather than an error — the CLI renders that
-// as "not configured".
+// GetNotifySetting reads the current notification config by parsing the "setting" blob returned by GET /api/user/self. A malformed blob yields a zero-value view rather than an error — the CLI renders that as "not configured".
 func (c *Client) GetNotifySetting(ctx context.Context) (*NotifySettingView, error) {
 	self, err := c.GetSelf(ctx)
 	if err != nil {
@@ -45,10 +35,7 @@ func (c *Client) GetNotifySetting(ctx context.Context) (*NotifySettingView, erro
 	return view, nil
 }
 
-// NotifySettingRequest is the PUT /api/user/setting body. NotifyType is
-// the channel (email/webhook/bark/gotify); the backend requires
-// QuotaWarningThreshold > 0 on every write. Only the fields for the
-// chosen channel need to be set — the backend ignores the rest.
+// NotifySettingRequest is the PUT /api/user/setting body. NotifyType is the channel (email/webhook/bark/gotify); the backend requires QuotaWarningThreshold > 0 on every write. Only the fields for the chosen channel need to be set — the backend ignores the rest.
 type NotifySettingRequest struct {
 	NotifyType            string  `json:"notify_type"`
 	QuotaWarningThreshold float64 `json:"quota_warning_threshold"`
@@ -79,9 +66,7 @@ func (c *Client) UpdateNotifySetting(ctx context.Context, req NotifySettingReque
 	return nil
 }
 
-// TestNotification fires a one-shot test message through the configured
-// channel (POST /api/user/setting/test). The backend surfaces a
-// delivery error verbatim, so a failed channel config shows up here.
+// TestNotification fires a one-shot test message through the configured channel (POST /api/user/setting/test). The backend surfaces a delivery error verbatim, so a failed channel config shows up here.
 func (c *Client) TestNotification(ctx context.Context) error {
 	var env struct {
 		Success bool   `json:"success"`

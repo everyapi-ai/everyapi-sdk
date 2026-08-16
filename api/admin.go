@@ -1,7 +1,4 @@
-// Admin SDK additions: user management, channel test / tag toggle,
-// log search, abuse report triage, audit log. Scoped to the most
-// on-call-useful surface — DB browser, ratio sync, dev-seed,
-// custom-oauth-provider CRUD stay dashboard-only for now.
+// Admin SDK additions: user management, channel test / tag toggle, log search, abuse report triage, audit log. Scoped to the most on-call-useful surface — DB browser, ratio sync, dev-seed, custom-oauth-provider CRUD stay dashboard-only for now.
 package api
 
 import (
@@ -12,8 +9,7 @@ import (
 	"strconv"
 )
 
-// AdminUserRow is the buyer-side view of an admin user list. Status
-// values come from common.UserStatus* (1=enabled, 2=disabled, …).
+// AdminUserRow is the buyer-side view of an admin user list. Status values come from common.UserStatus* (1=enabled, 2=disabled, …).
 type AdminUserRow struct {
 	ID          int    `json:"id"`
 	Username    string `json:"username"`
@@ -56,8 +52,7 @@ func (c *Client) AdminListUsers(ctx context.Context, page, pageSize int) ([]Admi
 	return env.Data.Items, env.Data.Total, nil
 }
 
-// AdminSearchUsers hits /api/user/search?keyword=… for fuzzy lookup
-// by username / email / display name.
+// AdminSearchUsers hits /api/user/search?keyword=… for fuzzy lookup by username / email / display name.
 func (c *Client) AdminSearchUsers(ctx context.Context, keyword string) ([]AdminUserRow, error) {
 	if keyword == "" {
 		return nil, fmt.Errorf("admin search: empty keyword")
@@ -100,10 +95,7 @@ func (c *Client) AdminGetUser(ctx context.Context, id int) (*AdminUserRow, error
 	return &env.Data, nil
 }
 
-// AdminManageRequest is the POST /api/user/manage payload. Action
-// values: "enable" / "disable" / "delete" / "promote_admin" /
-// "demote_admin". Value / Mode are action-specific (e.g. setting
-// a quota delta with action="topup" requires value).
+// AdminManageRequest is the POST /api/user/manage payload. Action values: "enable" / "disable" / "delete" / "promote_admin" / "demote_admin". Value / Mode are action-specific (e.g. setting a quota delta with action="topup" requires value).
 type AdminManageRequest struct {
 	ID     int    `json:"id"`
 	Action string `json:"action"`
@@ -111,9 +103,7 @@ type AdminManageRequest struct {
 	Mode   string `json:"mode,omitempty"`
 }
 
-// AdminManageUser issues POST /api/user/manage. Backend role check:
-// the caller's role must be strictly higher than the target's
-// (except RoleRootUser, which can touch anyone).
+// AdminManageUser issues POST /api/user/manage. Backend role check: the caller's role must be strictly higher than the target's (except RoleRootUser, which can touch anyone).
 func (c *Client) AdminManageUser(ctx context.Context, req AdminManageRequest) error {
 	if req.ID <= 0 {
 		return fmt.Errorf("admin manage: invalid user id %d", req.ID)
@@ -134,9 +124,7 @@ func (c *Client) AdminManageUser(ctx context.Context, req AdminManageRequest) er
 	return nil
 }
 
-// AdminDeleteUser hits DELETE /api/user/:id (hard-ish delete; the
-// backend has a separate "delete" action via ManageUser as well, but
-// this endpoint is the canonical one).
+// AdminDeleteUser hits DELETE /api/user/:id (hard-ish delete; the backend has a separate "delete" action via ManageUser as well, but this endpoint is the canonical one).
 func (c *Client) AdminDeleteUser(ctx context.Context, id int) error {
 	if id <= 0 {
 		return fmt.Errorf("admin delete user: invalid id %d", id)
@@ -156,9 +144,7 @@ func (c *Client) AdminDeleteUser(ctx context.Context, id int) error {
 
 // --- channel ---------------------------------------------------------
 
-// AdminTestChannel triggers a health-check against one channel id.
-// Returns the upstream's status code + raw body summary the backend
-// surfaces; loose typing because the shape varies by channel kind.
+// AdminTestChannel triggers a health-check against one channel id. Returns the upstream's status code + raw body summary the backend surfaces; loose typing because the shape varies by channel kind.
 func (c *Client) AdminTestChannel(ctx context.Context, id int) (map[string]any, error) {
 	if id <= 0 {
 		return nil, fmt.Errorf("admin test channel: invalid id %d", id)
@@ -177,9 +163,7 @@ func (c *Client) AdminTestChannel(ctx context.Context, id int) (map[string]any, 
 	return env.Data, nil
 }
 
-// AdminTagChannels flips every channel carrying the given tag to
-// enabled / disabled in one shot. enable=true → enable; false →
-// disable. Both endpoints take {"tag": "..."}.
+// AdminTagChannels flips every channel carrying the given tag to enabled / disabled in one shot. enable=true → enable; false → disable. Both endpoints take {"tag": "..."}.
 func (c *Client) AdminTagChannels(ctx context.Context, tag string, enable bool) error {
 	if tag == "" {
 		return fmt.Errorf("admin tag channels: empty tag")
@@ -258,9 +242,7 @@ func (f AdminLogFilter) query() string {
 	return ""
 }
 
-// AdminLogEntry is the admin-side log row. Duplicates LogEntry from
-// the (separate) buyer telemetry PR so this admin batch is
-// self-contained; consolidate after both merge.
+// AdminLogEntry is the admin-side log row. Duplicates LogEntry from the (separate) buyer telemetry PR so this admin batch is self-contained; consolidate after both merge.
 type AdminLogEntry struct {
 	ID               int    `json:"id"`
 	CreatedAt        int64  `json:"created_at"`
@@ -283,8 +265,7 @@ type AdminLogEntry struct {
 	Other            string `json:"other"`
 }
 
-// AdminListLogs hits GET /api/log/ — admin-only sibling of the
-// /api/log/self endpoint, with extra username + channel filters.
+// AdminListLogs hits GET /api/log/ — admin-only sibling of the /api/log/self endpoint, with extra username + channel filters.
 func (c *Client) AdminListLogs(ctx context.Context, f AdminLogFilter) ([]AdminLogEntry, int, error) {
 	var env struct {
 		Success bool   `json:"success"`
@@ -398,8 +379,7 @@ func (c *Client) AdminUpdateAbuseReport(ctx context.Context, id int, status, not
 
 // --- audit log -----------------------------------------------------
 
-// AuditLogRow is one entry in the admin audit log. Fields vary by
-// event type — Payload stays opaque.
+// AuditLogRow is one entry in the admin audit log. Fields vary by event type — Payload stays opaque.
 type AuditLogRow struct {
 	ID         int    `json:"id"`
 	CreatedAt  int64  `json:"created_at"`

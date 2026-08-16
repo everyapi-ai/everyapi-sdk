@@ -10,9 +10,7 @@ import (
 
 // --- notification ---------------------------------------------------
 
-// Notification is one row from /api/notification. The body fields
-// vary by notification type (compensation_filed / channel_disabled /
-// dm_opened / …) so Payload stays opaque.
+// Notification is one row from /api/notification. The body fields vary by notification type (compensation_filed / channel_disabled / dm_opened / …) so Payload stays opaque.
 type Notification struct {
 	ID        int    `json:"id"`
 	UserID    int    `json:"user_id"`
@@ -24,9 +22,7 @@ type Notification struct {
 	CreatedAt int64  `json:"created_at"`
 }
 
-// ListNotifications pages /api/notification. unreadOnly maps to the
-// ?unread=1 server-side filter — saves clients from re-filtering
-// pages of read rows just to find the new ones.
+// ListNotifications pages /api/notification. unreadOnly maps to the ?unread=1 server-side filter — saves clients from re-filtering pages of read rows just to find the new ones.
 func (c *Client) ListNotifications(ctx context.Context, unreadOnly bool, page, pageSize int) ([]Notification, int, error) {
 	v := url.Values{}
 	if unreadOnly {
@@ -95,9 +91,7 @@ func (c *Client) MarkNotificationRead(ctx context.Context, id int) error {
 	return nil
 }
 
-// MarkAllNotificationsRead flips every unread row. Returns the
-// number actually flipped — useful so the CLI can render "0 new"
-// without a follow-up unread-count call.
+// MarkAllNotificationsRead flips every unread row. Returns the number actually flipped — useful so the CLI can render "0 new" without a follow-up unread-count call.
 func (c *Client) MarkAllNotificationsRead(ctx context.Context) (int, error) {
 	var env struct {
 		Success bool   `json:"success"`
@@ -123,13 +117,7 @@ type DMContact struct {
 	Username string `json:"username"`
 }
 
-// DMThread is one row from /api/dm/thread — it mirrors the backend's
-// model.MessageThread wire shape. The thread stores its two
-// participants unordered as UserA / UserB (the server normalises the
-// pair before insert); it does NOT pre-compute an "other party" for
-// the caller, so the CLI resolves that viewer-relative from its own
-// user id. UnreadForViewer is already scoped to the requesting user by
-// the server.
+// DMThread is one row from /api/dm/thread — it mirrors the backend's model.MessageThread wire shape. The thread stores its two participants unordered as UserA / UserB (the server normalises the pair before insert); it does NOT pre-compute an "other party" for the caller, so the CLI resolves that viewer-relative from its own user id. UnreadForViewer is already scoped to the requesting user by the server.
 type DMThread struct {
 	ID            int    `json:"id"`
 	UserAID       int    `json:"user_a_id"`
@@ -137,16 +125,13 @@ type DMThread struct {
 	Subject       string `json:"subject"`
 	UserAUsername string `json:"user_a_username,omitempty"`
 	UserBUsername string `json:"user_b_username,omitempty"`
-	// UnreadForViewer is the unread count from the requesting user's
-	// side, filled in by the server.
+	// UnreadForViewer is the unread count from the requesting user's side, filled in by the server.
 	UnreadForViewer int   `json:"unread_for_viewer"`
 	LastMessageAt   int64 `json:"last_message_at"`
 	CreatedAt       int64 `json:"created_at"`
 }
 
-// DMMessage is one message in a thread. Read state is tracked per-thread
-// (a per-user read pointer on the thread), not per-message, so the backend
-// row carries no read_at — don't add one back expecting a per-message flag.
+// DMMessage is one message in a thread. Read state is tracked per-thread (a per-user read pointer on the thread), not per-message, so the backend row carries no read_at — don't add one back expecting a per-message flag.
 type DMMessage struct {
 	ID        int    `json:"id"`
 	ThreadID  int    `json:"thread_id"`
@@ -219,8 +204,7 @@ func (c *Client) ListDMThreads(ctx context.Context, page, pageSize int) ([]DMThr
 	return env.Data.Items, env.Data.Total, nil
 }
 
-// OpenDMThread starts a DM with another user (or returns the
-// existing thread id). Idempotent server-side.
+// OpenDMThread starts a DM with another user (or returns the existing thread id). Idempotent server-side.
 func (c *Client) OpenDMThread(ctx context.Context, otherUserID int) (*DMThread, error) {
 	if otherUserID <= 0 {
 		return nil, fmt.Errorf("open thread: invalid user id %d", otherUserID)
@@ -242,8 +226,7 @@ func (c *Client) OpenDMThread(ctx context.Context, otherUserID int) (*DMThread, 
 	return &env.Data, nil
 }
 
-// ListDMMessages reads messages from a thread. after is exclusive
-// (id > after) so callers can poll incrementally without dedup.
+// ListDMMessages reads messages from a thread. after is exclusive (id > after) so callers can poll incrementally without dedup.
 func (c *Client) ListDMMessages(ctx context.Context, threadID, after, limit int) ([]DMMessage, error) {
 	if threadID <= 0 {
 		return nil, fmt.Errorf("list messages: invalid thread id %d", threadID)
@@ -298,8 +281,7 @@ func (c *Client) SendDMMessage(ctx context.Context, threadID int, body string) (
 	return &env.Data, nil
 }
 
-// MarkDMRead marks all messages in a thread as read (server-side
-// updates the per-user read pointer).
+// MarkDMRead marks all messages in a thread as read (server-side updates the per-user read pointer).
 func (c *Client) MarkDMRead(ctx context.Context, threadID int) error {
 	if threadID <= 0 {
 		return fmt.Errorf("mark read: invalid thread id %d", threadID)

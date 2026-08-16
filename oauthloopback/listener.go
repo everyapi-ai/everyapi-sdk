@@ -1,19 +1,10 @@
-// Package oauthloopback runs a one-shot HTTP listener on an ephemeral
-// loopback port to receive an OAuth authorization-code redirect.
-// `everyapi seller add-oauth gemini` uses it: it picks a random port,
-// tells the backend "redirect Google to this URL", opens the browser,
-// then waits here for Google to GET /callback?code=…&state=… and
-// shuts down once it has the pair.
+// Package oauthloopback runs a one-shot HTTP listener on an ephemeral loopback port to receive an OAuth authorization-code redirect. `everyapi seller add-oauth gemini` uses it: it picks a random port, tells the backend "redirect Google to this URL", opens the browser, then waits here for Google to GET /callback?code=…&state=… and shuts down once it has the pair.
 //
 // Why a small dedicated package rather than inlining in cmd:
-//   - the listener has its own lifecycle (start, single-shot, stop)
-//     that's easier to reason about + test in isolation;
-//   - future OAuth flows (other providers, MCP server) can reuse this
-//     without dragging in cmd-level dependencies.
+//   - the listener has its own lifecycle (start, single-shot, stop) that's easier to reason about + test in isolation;
+//   - future OAuth flows (other providers, MCP server) can reuse this without dragging in cmd-level dependencies.
 //
-// Out of scope: TLS (loopback HTTP is fine — the OAuth state is
-// short-lived and never leaves localhost), persistent listeners
-// (every CLI invocation is a fresh process and gets its own port).
+// Out of scope: TLS (loopback HTTP is fine — the OAuth state is short-lived and never leaves localhost), persistent listeners (every CLI invocation is a fresh process and gets its own port).
 package oauthloopback
 
 import (
@@ -26,10 +17,7 @@ import (
 	"time"
 )
 
-// Result is what the listener captures from the single OAuth callback
-// it serves. Code+State are the success path. Error / ErrorDesc are
-// the failure path (Google sends `?error=...&error_description=...`
-// when the user denies, for example).
+// Result is what the listener captures from the single OAuth callback it serves. Code+State are the success path. Error / ErrorDesc are the failure path (Google sends `?error=...&error_description=...` when the user denies, for example).
 type Result struct {
 	Code      string
 	State     string
@@ -37,13 +25,7 @@ type Result struct {
 	ErrorDesc string
 }
 
-// Listener owns a net.Listener on a random loopback port + a
-// http.Server hooked to a single handler that captures the OAuth
-// callback. The lifecycle is strictly one-shot: the caller starts it,
-// calls Wait EXACTLY once, then closes (defer Close after the single
-// Wait is the intended pattern). Wait is not re-entrant — a second Wait
-// blocks on its own context because the result channel is drained by the
-// first call.
+// Listener owns a net.Listener on a random loopback port + a http.Server hooked to a single handler that captures the OAuth callback. The lifecycle is strictly one-shot: the caller starts it, calls Wait EXACTLY once, then closes (defer Close after the single Wait is the intended pattern). Wait is not re-entrant — a second Wait blocks on its own context because the result channel is drained by the first call.
 type Listener struct {
 	server *http.Server
 	addr   string
@@ -55,15 +37,9 @@ type Listener struct {
 	delivered bool // sticky: stays true once the first callback delivered
 }
 
-// Listen starts a loopback HTTP listener on a random ephemeral port.
-// The returned Listener's URL is what the OAuth caller should pass
-// as `redirect_uri` to the provider. Caller MUST call Close exactly
-// once (defer is fine) so the listener stops and the port is freed.
+// Listen starts a loopback HTTP listener on a random ephemeral port. The returned Listener's URL is what the OAuth caller should pass as `redirect_uri` to the provider. Caller MUST call Close exactly once (defer is fine) so the listener stops and the port is freed.
 func Listen() (*Listener, error) {
-	// "127.0.0.1:0" asks the kernel for an unused ephemeral port. We
-	// deliberately bind to 127.0.0.1 (not 0.0.0.0) so the listener
-	// isn't reachable from the network — the OAuth code would be
-	// readable by anyone else on the LAN otherwise.
+	// "127.0.0.1:0" asks the kernel for an unused ephemeral port. We deliberately bind to 127.0.0.1 (not 0.0.0.0) so the listener isn't reachable from the network — the OAuth code would be readable by anyone else on the LAN otherwise.
 	nl, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("listen loopback: %w", err)
@@ -81,8 +57,7 @@ func Listen() (*Listener, error) {
 	l.addr = fmt.Sprintf("127.0.0.1:%d", tcpAddr.Port)
 
 	mux := http.NewServeMux()
-	// /callback is the only route we serve. Any other request gets
-	// 404 — keeps the surface tiny and predictable.
+	// /callback is the only route we serve. Any other request gets 404 — keeps the surface tiny and predictable.
 	mux.HandleFunc("/callback", l.handleCallback)
 	l.server = &http.Server{
 		Handler:      mux,
@@ -97,22 +72,15 @@ func Listen() (*Listener, error) {
 	return l, nil
 }
 
-// URL is the loopback redirect_uri the caller should pass to the
-// OAuth provider. Always `http://127.0.0.1:<port>/callback` to match
-// the backend's validateLoopbackRedirectURI.
+// URL is the loopback redirect_uri the caller should pass to the OAuth provider. Always `http://127.0.0.1:<port>/callback` to match the backend's validateLoopbackRedirectURI.
 func (l *Listener) URL() string {
 	return "http://" + l.addr + "/callback"
 }
 
-// Port returns the port the listener bound to. Useful for logging /
-// error messages; not required for the OAuth flow itself.
+// Port returns the port the listener bound to. Useful for logging / error messages; not required for the OAuth flow itself.
 func (l *Listener) Port() int { return l.port }
 
-// Wait blocks until either the callback handler captures a result OR
-// the context is cancelled. It is single-shot: the result is delivered
-// over a channel and consumed by this one call, so a second Wait would
-// block on its own context (there is no re-delivery). Call it exactly
-// once and defer Close after it.
+// Wait blocks until either the callback handler captures a result OR the context is cancelled. It is single-shot: the result is delivered over a channel and consumed by this one call, so a second Wait would block on its own context (there is no re-delivery). Call it exactly once and defer Close after it.
 func (l *Listener) Wait(ctx context.Context) (Result, error) {
 	select {
 	case <-ctx.Done():
@@ -122,8 +90,7 @@ func (l *Listener) Wait(ctx context.Context) (Result, error) {
 	}
 }
 
-// Close stops the server and releases the port. Idempotent — calling
-// it multiple times (e.g. via defer + explicit cleanup) is safe.
+// Close stops the server and releases the port. Idempotent — calling it multiple times (e.g. via defer + explicit cleanup) is safe.
 func (l *Listener) Close() error {
 	l.mu.Lock()
 	if l.closed {
@@ -132,8 +99,7 @@ func (l *Listener) Close() error {
 	}
 	l.closed = true
 	l.mu.Unlock()
-	// Give Shutdown a short grace period so the success-page HTML
-	// finishes flushing to the browser tab before we yank the socket.
+	// Give Shutdown a short grace period so the success-page HTML finishes flushing to the browser tab before we yank the socket.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	return l.server.Shutdown(ctx)
@@ -148,15 +114,7 @@ func (l *Listener) handleCallback(w http.ResponseWriter, r *http.Request) {
 		ErrorDesc: q.Get("error_description"),
 	}
 
-	// Sticky one-shot delivery: a `delivered` flag (under l.mu) stays
-	// true once the first callback fired, independent of whether
-	// Wait() has drained the channel buffer yet. Without the sticky
-	// flag, a duplicate callback arriving AFTER Wait() returns (but
-	// BEFORE Close() shuts down the HTTP server — a several-second
-	// window in real flows) would successfully re-push to the empty
-	// buffer and render the success template, mimicking a finished
-	// flow to whoever fired the duplicate hit (browser retry, double-
-	// click, or hostile local process scanning loopback ports).
+	// Sticky one-shot delivery: a `delivered` flag (under l.mu) stays true once the first callback fired, independent of whether Wait() has drained the channel buffer yet. Without the sticky flag, a duplicate callback arriving AFTER Wait() returns (but BEFORE Close() shuts down the HTTP server — a several-second window in real flows) would successfully re-push to the empty buffer and render the success template, mimicking a finished flow to whoever fired the duplicate hit (browser retry, double- click, or hostile local process scanning loopback ports).
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	l.mu.Lock()
 	if l.delivered {
@@ -168,10 +126,7 @@ func (l *Listener) handleCallback(w http.ResponseWriter, r *http.Request) {
 	l.delivered = true
 	l.mu.Unlock()
 
-	// Non-blocking send: the buffer is sized 1 and we've just claimed
-	// the sole delivery slot under the lock above, so this case
-	// always succeeds. The default branch survives as a belt-and-
-	// suspenders guard against a stuck channel writer.
+	// Non-blocking send: the buffer is sized 1 and we've just claimed the sole delivery slot under the lock above, so this case always succeeds. The default branch survives as a belt-and- suspenders guard against a stuck channel writer.
 	select {
 	case l.resultCh <- res:
 	default:
@@ -220,9 +175,7 @@ func errorHTML(r Result) string {
 </body></html>`
 }
 
-// htmlEscape is a tiny manual escape — we only render OAuth provider
-// error strings, so the input shape is narrow and dragging in
-// html/template for one substitution is overkill.
+// htmlEscape is a tiny manual escape — we only render OAuth provider error strings, so the input shape is narrow and dragging in html/template for one substitution is overkill.
 func htmlEscape(s string) string {
 	var b []byte
 	for _, r := range s {

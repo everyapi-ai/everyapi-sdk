@@ -1,14 +1,6 @@
-// Admin/operator-side Antigravity OAuth (CLI side of
-// /api/channel/antigravity/oauth/*). Wire-identical to the seller loopback
-// flow (seller_antigravity_oauth.go) — the CLI runs a local 127.0.0.1
-// listener, the backend hands back a Google authorize URL pointing at it,
-// and the code lands on the listener with no manual paste. The differences
-// from the seller flow: the endpoint path lives under /api/channel (admin
-// channels:write), it carries an operator `group`, and the resulting
-// channel is platform-operated (no seller owner / marketplace gating).
+// Admin/operator-side Antigravity OAuth (CLI side of /api/channel/antigravity/oauth/*). Wire-identical to the seller loopback flow (seller_antigravity_oauth.go) — the CLI runs a local 127.0.0.1 listener, the backend hands back a Google authorize URL pointing at it, and the code lands on the listener with no manual paste. The differences from the seller flow: the endpoint path lives under /api/channel (admin channels:write), it carries an operator `group`, and the resulting channel is platform-operated (no seller owner / marketplace gating).
 //
-// Both calls require WithCookieJar — the backend stashes flow state in a
-// session keyed by the `everyapi_session` cookie, same as the seller flow.
+// Both calls require WithCookieJar — the backend stashes flow state in a session keyed by the `everyapi_session` cookie, same as the seller flow.
 package api
 
 import (
@@ -16,17 +8,13 @@ import (
 	"errors"
 )
 
-// AdminAntigravityOAuthStart is the /start response: AuthorizeURL is what
-// the operator opens; State correlates the loopback callback.
+// AdminAntigravityOAuthStart is the /start response: AuthorizeURL is what the operator opens; State correlates the loopback callback.
 type AdminAntigravityOAuthStart struct {
 	AuthorizeURL string `json:"authorize_url"`
 	State        string `json:"state"`
 }
 
-// StartAdminAntigravityOAuth kicks off an operator Antigravity OAuth flow
-// with the CLI-chosen loopback redirect. The backend validates redirectURI
-// is a real loopback URL before building the authorize URL. An empty group
-// lets the backend select its fixed fallback route group.
+// StartAdminAntigravityOAuth kicks off an operator Antigravity OAuth flow with the CLI-chosen loopback redirect. The backend validates redirectURI is a real loopback URL before building the authorize URL. An empty group lets the backend select its fixed fallback route group.
 func (c *Client) StartAdminAntigravityOAuth(ctx context.Context, name, models, group, redirectURI string) (*AdminAntigravityOAuthStart, error) {
 	body := map[string]string{
 		"name":         name,
@@ -48,17 +36,14 @@ func (c *Client) StartAdminAntigravityOAuth(ctx context.Context, name, models, g
 	return &env.Data, nil
 }
 
-// AdminAntigravityOAuthResult is the post-exchange payload — new channel id
-// + token expiry — the CLI prints back to the operator.
+// AdminAntigravityOAuthResult is the post-exchange payload — new channel id + token expiry — the CLI prints back to the operator.
 type AdminAntigravityOAuthResult struct {
 	ChannelID   int
 	ExpiresAt   string
 	LastRefresh string
 }
 
-// CompleteAdminAntigravityOAuth ships the code + state the CLI received on
-// its loopback listener. The backend finishes the token exchange with
-// Google and mints the antigravity-typed operator channel.
+// CompleteAdminAntigravityOAuth ships the code + state the CLI received on its loopback listener. The backend finishes the token exchange with Google and mints the antigravity-typed operator channel.
 func (c *Client) CompleteAdminAntigravityOAuth(ctx context.Context, code, state string) (*AdminAntigravityOAuthResult, error) {
 	body := map[string]string{"code": code, "state": state}
 	var env struct {

@@ -5,8 +5,7 @@ import (
 	"testing"
 )
 
-// tok32 is a stand-in 32-hex placeholder token for tests that need a
-// well-formed-but-arbitrary token without minting one through a mapping.
+// tok32 is a stand-in 32-hex placeholder token for tests that need a well-formed-but-arbitrary token without minting one through a mapping.
 func tok32(c byte) string { return strings.Repeat(string(c), placeholderTokenLen) }
 
 func TestMakePlaceholder(t *testing.T) {
@@ -40,8 +39,7 @@ func TestFindPlaceholders_None(t *testing.T) {
 }
 
 func TestFindPlaceholders_WrongBodyCharset(t *testing.T) {
-	// Old dense-numeric ids and non-hex bodies must NOT match the new
-	// regex — they're not tokens this scheme mints.
+	// Old dense-numeric ids and non-hex bodies must NOT match the new regex — they're not tokens this scheme mints.
 	for _, body := range []string{"001", "999", strings.Repeat("g", 32), strings.Repeat("a", 31)} {
 		s := "x " + PlaceholderPrefix + body + PlaceholderSuffix + " y"
 		if got := FindPlaceholders(s); got != nil {

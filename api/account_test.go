@@ -6,11 +6,7 @@ import (
 	"github.com/everyapi-ai/everyapi-sdk/config"
 )
 
-// ForCredentials must dial the region-selected gateway (settings.gateway_region
-// resolved via config.ResolveAPIBase), NOT the raw creds.APIBase field — that
-// is the whole point of the helper. This guards against a regression back to
-// api.New(creds.APIBase, ...), which silenced `settings set gateway_region`
-// for every command until a re-login rewrote credentials.json.
+// ForCredentials must dial the region-selected gateway (settings.gateway_region resolved via config.ResolveAPIBase), NOT the raw creds.APIBase field — that is the whole point of the helper. This guards against a regression back to api.New(creds.APIBase, ...), which silenced `settings set gateway_region` for every command until a re-login rewrote credentials.json.
 func TestForCredentialsAppliesGatewayRegion(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
@@ -37,10 +33,7 @@ func TestForCredentialsAppliesGatewayRegion(t *testing.T) {
 	}
 }
 
-// A self-hosted gateway (a non-official base on disk) must NOT be overridden by
-// gateway_region: ResolveAPIBase returns a custom creds base unchanged, so
-// pinning the CLI at a private backend keeps working regardless of the region
-// preference.
+// A self-hosted gateway (a non-official base on disk) must NOT be overridden by gateway_region: ResolveAPIBase returns a custom creds base unchanged, so pinning the CLI at a private backend keeps working regardless of the region preference.
 func TestForCredentialsKeepsSelfHostBase(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 

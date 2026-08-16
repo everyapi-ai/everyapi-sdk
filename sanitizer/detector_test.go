@@ -45,19 +45,9 @@ func TestDetector_AnthropicKey(t *testing.T) {
 }
 
 func TestDetector_NewProviderKeys(t *testing.T) {
-	// Fixtures intentionally use clearly-fake bodies (FAKE / TESTFIXTURE
-	// markers, `sk_test_` instead of `sk_live_`) so they match our regex
-	// without tripping GitHub Push Protection on the mirror repo — real
-	// `sk_live_…` strings with valid Stripe checksums get rejected at
-	// push time. Keep the markers if you ever rewrite these.
+	// Fixtures intentionally use clearly-fake bodies (FAKE / TESTFIXTURE markers, `sk_test_` instead of `sk_live_`) so they match our regex without tripping GitHub Push Protection on the mirror repo — real `sk_live_…` strings with valid Stripe checksums get rejected at push time. Keep the markers if you ever rewrite these.
 	//
-	// The Hugging Face fixture is a special case: GitHub's "Hugging Face
-	// User Access Token" partner pattern is a pure format match
-	// (`hf_` + 34 alnum) with NO entropy/dictionary check — unlike the
-	// Google/GitHub patterns, it flags even a sequential-filler body — so
-	// it blocked the SDK mirror push. Keep its body deliberately SHORTER
-	// than 34 chars (our own detector floor is only 20) so it can never
-	// look like a real HF token to push protection.
+	// The Hugging Face fixture is a special case: GitHub's "Hugging Face User Access Token" partner pattern is a pure format match (`hf_` + 34 alnum) with NO entropy/dictionary check — unlike the Google/GitHub patterns, it flags even a sequential-filler body — so it blocked the SDK mirror push. Keep its body deliberately SHORTER than 34 chars (our own detector floor is only 20) so it can never look like a real HF token to push protection.
 	cases := []struct {
 		name     string
 		d        *RegexDetector
@@ -93,9 +83,7 @@ func TestDetector_NewProviderKeys(t *testing.T) {
 }
 
 func TestScan_StripeKeyNotConfusedWithOpenAI(t *testing.T) {
-	// OpenAI keys are `sk-` (hyphen); Stripe is `sk_` (underscore).
-	// Both must be caught, by their OWN detector, with no overlap
-	// double-replace.
+	// OpenAI keys are `sk-` (hyphen); Stripe is `sk_` (underscore). Both must be caught, by their OWN detector, with no overlap double-replace.
 	s := "openai sk-proj_abcdefghijklmnopqrstuvwxyz0 and stripe sk_test_FAKETESTFIXTUREDONOTUSE001"
 	matches := Scan(s, BuiltinDetectors())
 	byName := map[string]bool{}
@@ -193,9 +181,7 @@ func TestDetector_ChineseID(t *testing.T) {
 // ---- Scan/Replace + overlap resolution ------------------------------------
 
 func TestScan_LongestWinsOnOverlap(t *testing.T) {
-	// `sk-ant-…` is matched by BOTH the OpenAI detector (sk-…) and
-	// the Anthropic detector (sk-ant-…). Scan must keep only the
-	// Anthropic match (longer-ish + earlier-registered).
+	// `sk-ant-…` is matched by BOTH the OpenAI detector (sk-…) and the Anthropic detector (sk-ant-…). Scan must keep only the Anthropic match (longer-ish + earlier-registered).
 	s := "auth: sk-ant-api03_abcdefghijklmnopqrstuvwxyz1234 end"
 	matches := Scan(s, BuiltinDetectors())
 	if len(matches) != 1 {
@@ -236,9 +222,7 @@ func TestReplaceWith_RewritesEachMatch(t *testing.T) {
 }
 
 func TestReplaceWith_SameValueGetsSamePlaceholder(t *testing.T) {
-	// Two occurrences of the same secret in one prompt must collapse
-	// to the same placeholder — both for cache stability and to
-	// preserve the equality that the model would otherwise see.
+	// Two occurrences of the same secret in one prompt must collapse to the same placeholder — both for cache stability and to preserve the equality that the model would otherwise see.
 	m := NewMapping()
 	dups := "k1=AKIAIOSFODNN7EXAMPLE log says key=AKIAIOSFODNN7EXAMPLE"
 	matches := Scan(dups, BuiltinDetectors())

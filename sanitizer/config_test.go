@@ -7,10 +7,7 @@ import (
 	"testing"
 )
 
-// withTempConfigDir points XDG_CONFIG_HOME at a t.TempDir() for the
-// duration of the test, so LoadFileConfig / SaveFileConfig don't
-// touch the real user home. Returns the resolved sanitizer.json path
-// for direct assertions.
+// withTempConfigDir points XDG_CONFIG_HOME at a t.TempDir() for the duration of the test, so LoadFileConfig / SaveFileConfig don't touch the real user home. Returns the resolved sanitizer.json path for direct assertions.
 func withTempConfigDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -153,9 +150,7 @@ func TestBuildDetectors_CustomAppended(t *testing.T) {
 }
 
 func TestBuildDetectors_UnknownDisabledIgnored(t *testing.T) {
-	// Future-compat: a disabled name no current binary knows about
-	// is silently ignored — doesn't crash, doesn't skip an unrelated
-	// detector.
+	// Future-compat: a disabled name no current binary knows about is silently ignored — doesn't crash, doesn't skip an unrelated detector.
 	fc := &FileConfig{Disabled: []string{"some_unknown_future_detector"}}
 	got := fc.BuildDetectors()
 	if len(got) != len(BuiltinDetectors()) {

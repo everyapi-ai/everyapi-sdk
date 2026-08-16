@@ -1,10 +1,4 @@
-// Seller-side OAuth onboarding (CLI side of /api/seller/codex/device/*).
-// The flow is RFC 8628-shaped, adapted for OpenAI's custom device
-// endpoints — see backend modules/provideroauth/codex_device.go for the wire
-// quirks. CLI's job is the polling loop + browser launch; the auth
-// state (device_auth_id, user_code, channel name + models) lives in
-// a backend session keyed by a cookie, which is why the client MUST
-// be built with WithCookieJar() before calling these.
+// Seller-side OAuth onboarding (CLI side of /api/seller/codex/device/*). The flow is RFC 8628-shaped, adapted for OpenAI's custom device endpoints — see backend modules/provideroauth/codex_device.go for the wire quirks. CLI's job is the polling loop + browser launch; the auth state (device_auth_id, user_code, channel name + models) lives in a backend session keyed by a cookie, which is why the client MUST be built with WithCookieJar() before calling these.
 package api
 
 import (
@@ -14,9 +8,7 @@ import (
 	"time"
 )
 
-// SellerCodexOAuthStart is the start-flow payload — what the seller
-// would have to type into `seller add-key` for the same effect, plus
-// the device-auth artifacts.
+// SellerCodexOAuthStart is the start-flow payload — what the seller would have to type into `seller add-key` for the same effect, plus the device-auth artifacts.
 type SellerCodexOAuthStart struct {
 	FlowID                  string `json:"flow_id"`
 	UserCode                string `json:"user_code"`
@@ -26,11 +18,7 @@ type SellerCodexOAuthStart struct {
 	ExpiresIn               int    `json:"expires_in"`
 }
 
-// StartSellerCodexOAuth kicks off the device-auth flow. name + models
-// are required server-side (the channel can't be mounted without
-// them) — the wizard / scripted caller must collect them up front.
-// Caller MUST have invoked WithCookieJar on the client; without it
-// the matching poll won't see the session-stashed device_auth_id.
+// StartSellerCodexOAuth kicks off the device-auth flow. name + models are required server-side (the channel can't be mounted without them) — the wizard / scripted caller must collect them up front. Caller MUST have invoked WithCookieJar on the client; without it the matching poll won't see the session-stashed device_auth_id.
 func (c *Client) StartSellerCodexOAuth(ctx context.Context, name, models string) (*SellerCodexOAuthStart, error) {
 	body := map[string]string{"name": name, "models": models}
 	var env struct {
@@ -47,9 +35,7 @@ func (c *Client) StartSellerCodexOAuth(ctx context.Context, name, models string)
 	return &env.Data, nil
 }
 
-// SellerCodexPollState differentiates "keep polling" from terminal
-// states. Mirror of the backend's code strings; the CLI poll loop
-// switches on this.
+// SellerCodexPollState differentiates "keep polling" from terminal states. Mirror of the backend's code strings; the CLI poll loop switches on this.
 type SellerCodexPollState int
 
 const (
@@ -60,9 +46,7 @@ const (
 	SellerCodexPollAuthorized
 )
 
-// SellerCodexPollResult carries the authorized-state payload alongside
-// the protocol state. ChannelID is the seller's freshly minted channel
-// row (only populated when State == Authorized).
+// SellerCodexPollResult carries the authorized-state payload alongside the protocol state. ChannelID is the seller's freshly minted channel row (only populated when State == Authorized).
 type SellerCodexPollResult struct {
 	State     SellerCodexPollState
 	ChannelID int
@@ -70,18 +54,13 @@ type SellerCodexPollResult struct {
 	AccountID string
 }
 
-// ErrSellerCodexPollExpired / ErrSellerCodexPollDenied are sentinels
-// the cmd layer renders into user-friendly messages. Mirror device-auth
-// login's ErrDeviceAuthExpired / ErrDeviceAuthDenied pattern.
+// ErrSellerCodexPollExpired / ErrSellerCodexPollDenied are sentinels the cmd layer renders into user-friendly messages. Mirror device-auth login's ErrDeviceAuthExpired / ErrDeviceAuthDenied pattern.
 var (
 	ErrSellerCodexPollExpired = errors.New("device authorization expired")
 	ErrSellerCodexPollDenied  = errors.New("device authorization denied")
 )
 
-// sellerCodexPollWire matches the success-path `data` payload from
-// PollSellerCodexDeviceOAuth: nested channel struct + flat email /
-// account_id. Non-success states carry their state in the outer
-// envelope's `code` field (see env struct below).
+// sellerCodexPollWire matches the success-path `data` payload from PollSellerCodexDeviceOAuth: nested channel struct + flat email / account_id. Non-success states carry their state in the outer envelope's `code` field (see env struct below).
 type sellerCodexPollWire struct {
 	Channel struct {
 		ID int `json:"id"`
@@ -90,8 +69,7 @@ type sellerCodexPollWire struct {
 	AccountID string `json:"account_id"`
 }
 
-// SellerCodexPoll makes one poll request. Use PollSellerCodexUntilDone
-// for the full loop — this is exported for testability.
+// SellerCodexPoll makes one poll request. Use PollSellerCodexUntilDone for the full loop — this is exported for testability.
 func (c *Client) SellerCodexPoll(ctx context.Context, flowID string) (*SellerCodexPollResult, error) {
 	body := map[string]string{"flow_id": flowID}
 	var env struct {
@@ -100,10 +78,7 @@ func (c *Client) SellerCodexPoll(ctx context.Context, flowID string) (*SellerCod
 		Code    string              `json:"code"`
 		Data    sellerCodexPollWire `json:"data"`
 	}
-	// The poll endpoint returns HTTP 200 for non-terminal states (the
-	// `code` field carries pending/slow_down/expired/denied) and HTTP
-	// 200 for success too; only transport / server errors come back
-	// as a non-2xx and get translated to *APIError by do().
+	// The poll endpoint returns HTTP 200 for non-terminal states (the `code` field carries pending/slow_down/expired/denied) and HTTP 200 for success too; only transport / server errors come back as a non-2xx and get translated to *APIError by do().
 	if err := c.do(ctx, "POST", "/api/seller/codex/device/poll", body, &env); err != nil {
 		return nil, err
 	}
@@ -115,8 +90,7 @@ func (c *Client) SellerCodexPoll(ctx context.Context, flowID string) (*SellerCod
 		out.AccountID = env.Data.AccountID
 		return out, nil
 	}
-	// Non-success envelope: classify by `code`. An unknown code is a
-	// server-side bug — surface as error rather than silently looping.
+	// Non-success envelope: classify by `code`. An unknown code is a server-side bug — surface as error rather than silently looping.
 	switch env.Code {
 	case "pending":
 		out.State = SellerCodexPollPending
@@ -132,10 +106,7 @@ func (c *Client) SellerCodexPoll(ctx context.Context, flowID string) (*SellerCod
 	return out, nil
 }
 
-// PollSellerCodexUntilDone runs the poll loop until success / terminal
-// failure / ctx cancel. Mirrors PollUntilDone (device-auth login) —
-// see that one's commentary on the transient-retry budget; we share
-// the same constant.
+// PollSellerCodexUntilDone runs the poll loop until success / terminal failure / ctx cancel. Mirrors PollUntilDone (device-auth login) — see that one's commentary on the transient-retry budget; we share the same constant.
 func (c *Client) PollSellerCodexUntilDone(ctx context.Context, flowID string, initialIntervalSecs int) (*SellerCodexPollResult, error) {
 	interval := time.Duration(initialIntervalSecs) * time.Second
 	if interval <= 0 {

@@ -13,17 +13,9 @@ import (
 	"time"
 )
 
-// eventWaitDeadline bounds work that should complete immediately (an in-memory
-// parse, a channel close). It only ever fires on failure, so it is deliberately
-// generous rather than tight.
+// eventWaitDeadline bounds work that should complete immediately (an in-memory parse, a channel close). It only ever fires on failure, so it is deliberately generous rather than tight.
 //
-// It governs BOTH the receive-side time.After and the context handed to
-// parseSSE, because the context is the binding one: parseSSE selects on
-// ctx.Done(), so a 1s ctx killed the parse before it emitted and the receive
-// then reported "no event received" — raising only the receive deadline moved
-// nothing. On an idle laptop 1s is ample; on a cold CI runner compiling and
-// running all five sdk packages under -race it is not, and the sdk-agent job is
-// the first thing to ever run these under -race at all.
+// It governs BOTH the receive-side time.After and the context handed to parseSSE, because the context is the binding one: parseSSE selects on ctx.Done(), so a 1s ctx killed the parse before it emitted and the receive then reported "no event received" — raising only the receive deadline moved nothing. On an idle laptop 1s is ample; on a cold CI runner compiling and running all five sdk packages under -race it is not, and the sdk-agent job is the first thing to ever run these under -race at all.
 const eventWaitDeadline = 10 * time.Second
 
 func TestParseSSE_BasicEvent(t *testing.T) {
@@ -114,8 +106,7 @@ func TestParseSSE_CommentIgnored(t *testing.T) {
 }
 
 func TestParseSSE_ContextCancelExits(t *testing.T) {
-	// A reader that blocks forever — only ctx cancellation can stop
-	// parseSSE.
+	// A reader that blocks forever — only ctx cancellation can stop parseSSE.
 	pr, pw := io.Pipe()
 	defer pw.Close()
 	out := make(chan Event, 1)
@@ -134,10 +125,7 @@ func TestParseSSE_ContextCancelExits(t *testing.T) {
 	}
 }
 
-// TestSubscribeEvents_ReconnectsOnTransportError drives the full
-// reconnect loop: a server that closes the first connection after
-// one event, the client should reconnect and consume the second
-// event from a fresh HTTP request.
+// TestSubscribeEvents_ReconnectsOnTransportError drives the full reconnect loop: a server that closes the first connection after one event, the client should reconnect and consume the second event from a fresh HTTP request.
 func TestSubscribeEvents_ReconnectsOnTransportError(t *testing.T) {
 	var conns atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -170,23 +158,13 @@ func TestSubscribeEvents_ReconnectsOnTransportError(t *testing.T) {
 			t.Fatalf("only received %d/2 events: %v", len(got), got)
 		}
 	}
-	// Deliberately not asserting the exact numbers. This handler closes the
-	// connection after every response, which is precisely the condition under
-	// which Go's http.Transport transparently retries an idempotent GET on a
-	// pooled-but-dead connection. That retry increments the server's counter
-	// for a response the client discards, so the first event the client
-	// observes is legitimately not always conn=1 — asserting [1 2] made this
-	// test fail ~2% of the time (always as [2 3]) on a property the test does
-	// not control. What the reconnect loop must guarantee is that the second
-	// event arrives over a LATER connection than the first, i.e. a reconnect
-	// really happened rather than both events coming from one stream.
+	// Deliberately not asserting the exact numbers. This handler closes the connection after every response, which is precisely the condition under which Go's http.Transport transparently retries an idempotent GET on a pooled-but-dead connection. That retry increments the server's counter for a response the client discards, so the first event the client observes is legitimately not always conn=1 — asserting [1 2] made this test fail ~2% of the time (always as [2 3]) on a property the test does not control. What the reconnect loop must guarantee is that the second event arrives over a LATER connection than the first, i.e. a reconnect really happened rather than both events coming from one stream.
 	if got[0] >= got[1] {
 		t.Errorf("conn sequence = %v, want two events from strictly increasing connections (proving a reconnect)", got)
 	}
 }
 
-// TestSubscribeEvents_OnTransportErrCallback verifies the error
-// callback fires when a reconnect happens.
+// TestSubscribeEvents_OnTransportErrCallback verifies the error callback fires when a reconnect happens.
 func TestSubscribeEvents_OnTransportErrCallback(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 500 → triggers reconnect path
@@ -207,11 +185,7 @@ func TestSubscribeEvents_OnTransportErrCallback(t *testing.T) {
 	}
 }
 
-// TestSubscribeEvents_Unauthorized401StopsReconnect verifies a 401
-// from the SSE endpoint causes the SDK to give up retrying. The
-// review caught that the original loop would reconnect every 30s
-// forever after a token revocation — bandwidth burn AND server-side
-// rate-limit risk.
+// TestSubscribeEvents_Unauthorized401StopsReconnect verifies a 401 from the SSE endpoint causes the SDK to give up retrying. The review caught that the original loop would reconnect every 30s forever after a token revocation — bandwidth burn AND server-side rate-limit risk.
 func TestSubscribeEvents_Unauthorized401StopsReconnect(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -22,10 +22,7 @@ func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return f(r)
 }
 
-// TestPollUntilDone_HappyPath: pending → pending → authorized. The
-// poller must keep looping past pendings and stop on the authorized
-// reply, returning the token. We exercise the loop with a 1-second
-// initial interval so the test finishes in under 5 seconds.
+// TestPollUntilDone_HappyPath: pending → pending → authorized. The poller must keep looping past pendings and stop on the authorized reply, returning the token. We exercise the loop with a 1-second initial interval so the test finishes in under 5 seconds.
 func TestPollUntilDone_HappyPath(t *testing.T) {
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -54,9 +51,7 @@ func TestPollUntilDone_HappyPath(t *testing.T) {
 	}
 }
 
-// TestPollUntilDone_Expired: server returns "expired" → poller
-// surfaces ErrDeviceAuthExpired (the cmd layer renders it as a
-// "took too long" message).
+// TestPollUntilDone_Expired: server returns "expired" → poller surfaces ErrDeviceAuthExpired (the cmd layer renders it as a "took too long" message).
 func TestPollUntilDone_Expired(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"success":true,"data":{"status":"expired"}}`))
@@ -70,8 +65,7 @@ func TestPollUntilDone_Expired(t *testing.T) {
 	}
 }
 
-// TestPollUntilDone_Denied: server returns "denied" → poller
-// surfaces ErrDeviceAuthDenied.
+// TestPollUntilDone_Denied: server returns "denied" → poller surfaces ErrDeviceAuthDenied.
 func TestPollUntilDone_Denied(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"success":true,"data":{"status":"denied"}}`))
@@ -85,10 +79,7 @@ func TestPollUntilDone_Denied(t *testing.T) {
 	}
 }
 
-// TestPollUntilDone_SlowDown verifies the interval-bump path. The
-// server returns slow_down once, then authorized. We don't measure
-// wall-clock interval growth (flaky); we just confirm the loop
-// terminates on the authorized reply after the slow_down step.
+// TestPollUntilDone_SlowDown verifies the interval-bump path. The server returns slow_down once, then authorized. We don't measure wall-clock interval growth (flaky); we just confirm the loop terminates on the authorized reply after the slow_down step.
 func TestPollUntilDone_SlowDown(t *testing.T) {
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -113,9 +104,7 @@ func TestPollUntilDone_SlowDown(t *testing.T) {
 	}
 }
 
-// TestDeviceAuthStart_HappyPath: confirm the start response shape is
-// decoded correctly (device_code, user_code, verification_uri,
-// interval all surface through). Guards against future renames.
+// TestDeviceAuthStart_HappyPath: confirm the start response shape is decoded correctly (device_code, user_code, verification_uri, interval all surface through). Guards against future renames.
 func TestDeviceAuthStart_HappyPath(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
@@ -186,9 +175,7 @@ func TestClient_RetriesChinaGatewayOnDNSNotFound(t *testing.T) {
 	}
 }
 
-// TestClient_ServerError surfaces an APIError when the server says
-// success=false. The cmd layer relies on this so a server-side "bad
-// request" doesn't appear as a generic "couldn't decode response".
+// TestClient_ServerError surfaces an APIError when the server says success=false. The cmd layer relies on this so a server-side "bad request" doesn't appear as a generic "couldn't decode response".
 func TestClient_ServerError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
@@ -213,19 +200,13 @@ func TestClient_ServerError(t *testing.T) {
 	}
 }
 
-// TestPollUntilDone_TransientRetry covers the "wifi blip" path: the
-// first two poll attempts fail at the transport layer (server hung
-// up on the TCP connection without sending a response), the third
-// succeeds with authorized. Without the retry budget the user would
-// see `everyapi login` die mid-flow; with it, the flow completes.
+// TestPollUntilDone_TransientRetry covers the "wifi blip" path: the first two poll attempts fail at the transport layer (server hung up on the TCP connection without sending a response), the third succeeds with authorized. Without the retry budget the user would see `everyapi login` die mid-flow; with it, the flow completes.
 func TestPollUntilDone_TransientRetry(t *testing.T) {
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := atomic.AddInt32(&calls, 1)
 		if n <= 2 {
-			// Close the underlying connection without sending a
-			// reply — http.Client surfaces this as a non-API
-			// transport error, which the retry budget should absorb.
+			// Close the underlying connection without sending a reply — http.Client surfaces this as a non-API transport error, which the retry budget should absorb.
 			hj, ok := w.(http.Hijacker)
 			if !ok {
 				t.Fatal("ResponseWriter does not support hijack")
@@ -253,9 +234,7 @@ func TestPollUntilDone_TransientRetry(t *testing.T) {
 	}
 }
 
-// TestPollUntilDone_TransientBudgetExhausted: when transient errors
-// outlast the retry budget, the final transport error propagates
-// rather than retrying forever.
+// TestPollUntilDone_TransientBudgetExhausted: when transient errors outlast the retry budget, the final transport error propagates rather than retrying forever.
 func TestPollUntilDone_TransientBudgetExhausted(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hj, ok := w.(http.Hijacker)
@@ -274,8 +253,7 @@ func TestPollUntilDone_TransientBudgetExhausted(t *testing.T) {
 	if err == nil {
 		t.Fatal("want error after transient budget exhausted")
 	}
-	// Must NOT be one of the protocol sentinels — those signal a
-	// terminal server response.
+	// Must NOT be one of the protocol sentinels — those signal a terminal server response.
 	if errors.Is(err, ErrDeviceAuthExpired) || errors.Is(err, ErrDeviceAuthDenied) {
 		t.Errorf("unexpected sentinel error: %v", err)
 	}

@@ -40,11 +40,7 @@ func TestListTokens(t *testing.T) {
 		}
 	})
 
-	// Backends sometimes signal a soft failure as HTTP 200 with
-	// `success:false` in the EveryAPI envelope (validation errors,
-	// missing scopes). `do` returns nil for 2xx, so the `!Success`
-	// branch in ListTokens is the only thing that turns this into an
-	// error — keep it covered.
+	// Backends sometimes signal a soft failure as HTTP 200 with `success:false` in the EveryAPI envelope (validation errors, missing scopes). `do` returns nil for 2xx, so the `!Success` branch in ListTokens is the only thing that turns this into an error — keep it covered.
 	t.Run("success:false at 200 surfaces the message", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
@@ -149,11 +145,7 @@ func TestTokenKey(t *testing.T) {
 		}
 	})
 
-	// 200 with success:false (or success:true + empty key) — same
-	// soft-failure pattern as ListTokens. The empty-key check catches
-	// a server bug where the envelope is fine but the payload is
-	// missing the key field; we'd rather error than hand the user an
-	// empty ANTHROPIC_AUTH_TOKEN.
+	// 200 with success:false (or success:true + empty key) — same soft-failure pattern as ListTokens. The empty-key check catches a server bug where the envelope is fine but the payload is missing the key field; we'd rather error than hand the user an empty ANTHROPIC_AUTH_TOKEN.
 	t.Run("success:false at 200 is an error", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
@@ -255,9 +247,7 @@ func TestUpdateToken(t *testing.T) {
 		if r.Method != "PUT" || r.URL.Path != "/api/token/" {
 			t.Errorf("got %s %s, want PUT /api/token/", r.Method, r.URL.Path)
 		}
-		// Full update must NOT carry the status_only flag — that's
-		// SetTokenStatus's job, and the backend reads only Status in
-		// that mode which would silently drop everything else.
+		// Full update must NOT carry the status_only flag — that's SetTokenStatus's job, and the backend reads only Status in that mode which would silently drop everything else.
 		if r.URL.RawQuery != "" {
 			t.Errorf("PUT /api/token/ should have no query, got %q", r.URL.RawQuery)
 		}
@@ -322,8 +312,7 @@ func TestDeleteToken(t *testing.T) {
 
 func TestDeleteTokens(t *testing.T) {
 	t.Run("rejects empty ids without a roundtrip", func(t *testing.T) {
-		// Use a server that fails the test if it gets hit — the SDK
-		// must short-circuit empty ids before sending anything.
+		// Use a server that fails the test if it gets hit — the SDK must short-circuit empty ids before sending anything.
 		srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 			t.Error("server should not be called for empty ids")
 		}))

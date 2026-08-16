@@ -118,16 +118,13 @@ func TestServerClaudeGuardDetectsPollutionSplitAcrossTextDeltas(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	// The first standalone instance of a token can never be recognized as a
-	// flood (nothing to repeat against yet), so at most one may stream out.
+	// The first standalone instance of a token can never be recognized as a flood (nothing to repeat against yet), so at most one may stream out.
 	if bytes.Count(body, []byte("court")) > 1 || !bytes.Contains(body, []byte(`"type":"tool_use"`)) {
 		t.Fatalf("split pollution was not filtered safely: %s", body)
 	}
 }
 
-// Mirrors the 2026-07-22 incident shape verbatim: the flood word 课 standing
-// alone line after line at a tool_use boundary. Kept alongside the novel-token
-// case as a regression pin on the real captured incident.
+// Mirrors the 2026-07-22 incident shape verbatim: the flood word 课 standing alone line after line at a tool_use boundary. Kept alongside the novel-token case as a regression pin on the real captured incident.
 func TestServerClaudeGuardDetectsSimplifiedCJKFlood(t *testing.T) {
 	stream := sseTextEvent(0, "查那个文件。\n\n") + sseTextEvent(0, "课\n\n") + sseTextEvent(0, "课\n\n") + sseTextEvent(0, "课") +
 		claudeToolUseBlockEvent(1) + claudeMessageDeltaEvent("tool_use") + claudeMessageStopEvent()
@@ -149,9 +146,7 @@ func TestServerClaudeGuardDetectsSimplifiedCJKFlood(t *testing.T) {
 	}
 }
 
-// The flood token mutates faster than any word list can track. This case uses
-// 程 — deliberately absent from every control-word list — to pin the guard to
-// the token-agnostic shape signal (RepeatedStandaloneLine) instead.
+// The flood token mutates faster than any word list can track. This case uses 程 — deliberately absent from every control-word list — to pin the guard to the token-agnostic shape signal (RepeatedStandaloneLine) instead.
 func TestServerClaudeGuardDetectsNovelTokenFlood(t *testing.T) {
 	stream := sseTextEvent(0, "程\n\n") + sseTextEvent(0, "程\n\n") + sseTextEvent(0, "程") +
 		claudeToolUseBlockEvent(1) + claudeMessageDeltaEvent("tool_use") + claudeMessageStopEvent()
@@ -168,18 +163,13 @@ func TestServerClaudeGuardDetectsNovelTokenFlood(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	// A never-seen token cannot be recognized on its FIRST standalone line —
-	// there is nothing to match it against yet — so exactly one instance may
-	// stream through. From the second line the shape signal holds, and the
-	// third confirms and drops. The incident this guards against shipped 26.
+	// A never-seen token cannot be recognized on its FIRST standalone line — there is nothing to match it against yet — so exactly one instance may stream through. From the second line the shape signal holds, and the third confirms and drops. The incident this guards against shipped 26.
 	if bytes.Count(body, []byte("程")) > 1 || !bytes.Contains(body, []byte(`"type":"tool_use"`)) {
 		t.Fatalf("novel-token flood was not filtered safely: %s", body)
 	}
 }
 
-// Leaked tool-call wire markup is a fixed protocol frame (not a mutating
-// flood token) and must trip the captured-stream check regardless of stop
-// reason.
+// Leaked tool-call wire markup is a fixed protocol frame (not a mutating flood token) and must trip the captured-stream check regardless of stop reason.
 func TestClaudeGuardDetectsLeakedInvokeMarkup(t *testing.T) {
 	stream := sseTextEvent(0, "count\n<invoke name=\"Bash\"><parameter name=\"command\">pwd</parameter></invoke>") +
 		claudeMessageDeltaEvent("end_turn") + claudeMessageStopEvent()
@@ -189,9 +179,7 @@ func TestClaudeGuardDetectsLeakedInvokeMarkup(t *testing.T) {
 	}
 }
 
-// A legitimate label/value checklist repeats a value word on 3+ standalone
-// lines but interleaved with labels — the tail-dominance gate must let it
-// stream through untouched.
+// A legitimate label/value checklist repeats a value word on 3+ standalone lines but interleaved with labels — the tail-dominance gate must let it stream through untouched.
 func TestServerClaudeGuardAllowsRepeatedChecklistValues(t *testing.T) {
 	stream := sseTextEvent(0, "auth-service\nPassed\nbilling\nPassed\nweb\nPassed\n") +
 		sseTextEvent(0, "All three services are healthy, proceeding.\n") +
@@ -378,9 +366,7 @@ func claudeToolUseBlockEvent(idx int) string {
 }
 
 func TestClaudeGuardAllowsStandaloneWordsWithStructuredToolUse(t *testing.T) {
-	// A valid tool-calling turn whose narration happens to contain bare
-	// control-word lines (e.g. listing SQL column names) must NOT be
-	// rejected: the structured tool_use block proves the wire is intact.
+	// A valid tool-calling turn whose narration happens to contain bare control-word lines (e.g. listing SQL column names) must NOT be rejected: the structured tool_use block proves the wire is intact.
 	stream := sseTextEvent(0, "The relevant columns are:\nid\ncount\ncall") +
 		claudeToolUseBlockEvent(1) +
 		claudeMessageDeltaEvent("tool_use") + claudeMessageStopEvent()
@@ -530,10 +516,7 @@ func TestServerClaudeGuardPassesCleanSSEByteIdentical(t *testing.T) {
 }
 
 func TestServerClaudeGuardPassesCleanSSEByteIdenticalWithPlaceholderPrefixTail(t *testing.T) {
-	// A text delta ending in '<' (a placeholder-prefix byte) must still be
-	// forwarded byte-identical in guard-only mode: with no detectors there
-	// is nothing to restore, so the restorer's partial-placeholder carry
-	// logic must not reframe the events.
+	// A text delta ending in '<' (a placeholder-prefix byte) must still be forwarded byte-identical in guard-only mode: with no detectors there is nothing to restore, so the restorer's partial-placeholder carry logic must not reframe the events.
 	clean := sseTextEvent(0, "render <") + sseTextEvent(0, "div>") +
 		claudeMessageDeltaEvent("end_turn") + claudeMessageStopEvent()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

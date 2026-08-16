@@ -1,8 +1,4 @@
-// Admin redemption-code SDK: CRUD over /api/redemption (AdminAuth).
-// Redemption codes are prepaid quota vouchers — `AddRedemption`
-// MINTS quota, so creation is the one verb a CLI must surface
-// carefully (it's the only place the generated key strings are
-// returned). Mirrors admin.go's (rows, total, err) pagination shape.
+// Admin redemption-code SDK: CRUD over /api/redemption (AdminAuth). Redemption codes are prepaid quota vouchers — `AddRedemption` MINTS quota, so creation is the one verb a CLI must surface carefully (it's the only place the generated key strings are returned). Mirrors admin.go's (rows, total, err) pagination shape.
 package api
 
 import (
@@ -20,9 +16,7 @@ const (
 	RedemptionStatusUsed     = 3
 )
 
-// Redemption is one row from /api/redemption. Key is the 32-char
-// voucher code. ExpiredTime is unix seconds; 0 means never expires.
-// CreatorUsername / UsedUsername are display-only joins.
+// Redemption is one row from /api/redemption. Key is the 32-char voucher code. ExpiredTime is unix seconds; 0 means never expires. CreatorUsername / UsedUsername are display-only joins.
 type Redemption struct {
 	ID              int    `json:"id"`
 	UserID          int    `json:"user_id"`
@@ -116,9 +110,7 @@ func (c *Client) AdminGetRedemption(ctx context.Context, id int) (*Redemption, e
 	return &env.Data, nil
 }
 
-// RedemptionCreateRequest is the POST /api/redemption/ body. Count is
-// how many codes to mint (1–100); each gets Quota. ExpiredTime is unix
-// seconds, 0 = never (must be in the future when non-zero).
+// RedemptionCreateRequest is the POST /api/redemption/ body. Count is how many codes to mint (1–100); each gets Quota. ExpiredTime is unix seconds, 0 = never (must be in the future when non-zero).
 type RedemptionCreateRequest struct {
 	Name        string `json:"name"`
 	Count       int    `json:"count"`
@@ -126,12 +118,7 @@ type RedemptionCreateRequest struct {
 	ExpiredTime int64  `json:"expired_time,omitempty"`
 }
 
-// AdminCreateRedemptions mints Count codes and returns the generated
-// key strings — the ONLY place the plaintext keys are returned, so the
-// caller must capture them immediately. The backend has no transaction
-// around the batch: on a mid-batch failure it returns success:false
-// with the keys created so far, which surfaces here as an error (the
-// partial keys are lost to the CLI — re-list to recover them).
+// AdminCreateRedemptions mints Count codes and returns the generated key strings — the ONLY place the plaintext keys are returned, so the caller must capture them immediately. The backend has no transaction around the batch: on a mid-batch failure it returns success:false with the keys created so far, which surfaces here as an error (the partial keys are lost to the CLI — re-list to recover them).
 func (c *Client) AdminCreateRedemptions(ctx context.Context, req RedemptionCreateRequest) ([]string, error) {
 	if req.Name == "" {
 		return nil, fmt.Errorf("create redemption: empty name")
@@ -153,8 +140,7 @@ func (c *Client) AdminCreateRedemptions(ctx context.Context, req RedemptionCreat
 	return env.Data, nil
 }
 
-// AdminUpdateRedemption edits name / quota / expired_time of one code
-// (id required). Status is left untouched — use AdminSetRedemptionStatus.
+// AdminUpdateRedemption edits name / quota / expired_time of one code (id required). Status is left untouched — use AdminSetRedemptionStatus.
 func (c *Client) AdminUpdateRedemption(ctx context.Context, r Redemption) error {
 	if r.ID <= 0 {
 		return fmt.Errorf("update redemption: invalid id %d", r.ID)
@@ -172,8 +158,7 @@ func (c *Client) AdminUpdateRedemption(ctx context.Context, r Redemption) error 
 	return nil
 }
 
-// AdminSetRedemptionStatus flips only the status via the status_only
-// fast-path (PUT /api/redemption/?status_only=1).
+// AdminSetRedemptionStatus flips only the status via the status_only fast-path (PUT /api/redemption/?status_only=1).
 func (c *Client) AdminSetRedemptionStatus(ctx context.Context, id, status int) error {
 	if id <= 0 {
 		return fmt.Errorf("set redemption status: invalid id %d", id)
@@ -210,9 +195,7 @@ func (c *Client) AdminDeleteRedemption(ctx context.Context, id int) error {
 	return nil
 }
 
-// AdminDeleteInvalidRedemptions bulk-deletes every used / disabled /
-// expired code and returns the number removed. Destructive and
-// unconfirmed server-side — the caller should confirm first.
+// AdminDeleteInvalidRedemptions bulk-deletes every used / disabled / expired code and returns the number removed. Destructive and unconfirmed server-side — the caller should confirm first.
 func (c *Client) AdminDeleteInvalidRedemptions(ctx context.Context) (int64, error) {
 	var env struct {
 		Success bool   `json:"success"`

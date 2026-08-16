@@ -8,8 +8,7 @@ import (
 
 // ---- SSE test helpers -----------------------------------------------------
 
-// sseTextEvent builds an Anthropic content_block_delta/text_delta event,
-// JSON-encoding the text exactly like the gateway (brackets HTML-escaped).
+// sseTextEvent builds an Anthropic content_block_delta/text_delta event, JSON-encoding the text exactly like the gateway (brackets HTML-escaped).
 func sseTextEvent(idx int, text string) string {
 	b, _ := json.Marshal(map[string]any{
 		"type":  "content_block_delta",
@@ -19,8 +18,7 @@ func sseTextEvent(idx int, text string) string {
 	return "event: content_block_delta\ndata: " + string(b) + "\n\n"
 }
 
-// sseToolArgEvent builds an Anthropic input_json_delta (tool argument)
-// event.
+// sseToolArgEvent builds an Anthropic input_json_delta (tool argument) event.
 func sseToolArgEvent(idx int, partial string) string {
 	b, _ := json.Marshal(map[string]any{
 		"type":  "content_block_delta",
@@ -43,8 +41,7 @@ func sseOpenAIContent(text string) string {
 	return "data: " + string(b) + "\n\n"
 }
 
-// sseDecodeText concatenates every restored human-display text fragment in
-// an SSE output stream (Anthropic text deltas + OpenAI content deltas).
+// sseDecodeText concatenates every restored human-display text fragment in an SSE output stream (Anthropic text deltas + OpenAI content deltas).
 func sseDecodeText(t *testing.T, out string) string {
 	t.Helper()
 	var sb strings.Builder
@@ -81,8 +78,7 @@ func sseDecodeText(t *testing.T, out string) string {
 	return sb.String()
 }
 
-// assertSSEDataValid checks every `data:` line in the output parses as
-// JSON — i.e. no restored secret broke the framing/escaping.
+// assertSSEDataValid checks every `data:` line in the output parses as JSON — i.e. no restored secret broke the framing/escaping.
 func assertSSEDataValid(t *testing.T, out string) {
 	t.Helper()
 	for _, ev := range strings.Split(out, "\n\n") {
@@ -116,8 +112,7 @@ func TestSSE_SingleEventEscapedBrackets(t *testing.T) {
 	}
 }
 
-// TestSSE_SplitAcrossEvents is the confirmed anchor bug: a placeholder
-// split across two display deltas must be reassembled and restored.
+// TestSSE_SplitAcrossEvents is the confirmed anchor bug: a placeholder split across two display deltas must be reassembled and restored.
 func TestSSE_SplitAcrossEvents(t *testing.T) {
 	m := NewMapping()
 	secret := "sk-secret-BBBBBBBBBBBBBBBBBBBB"
@@ -140,8 +135,7 @@ func TestSSE_SplitAcrossEvents(t *testing.T) {
 	}
 }
 
-// TestSSE_SplitEveryWireBoundary feeds a single event split at every byte
-// boundary; frame reassembly must restore it regardless.
+// TestSSE_SplitEveryWireBoundary feeds a single event split at every byte boundary; frame reassembly must restore it regardless.
 func TestSSE_SplitEveryWireBoundary(t *testing.T) {
 	m := NewMapping()
 	ph := m.PutOrGet("sk-real-CCCCCCCCCCCCCCCCCCCC")
@@ -155,8 +149,7 @@ func TestSSE_SplitEveryWireBoundary(t *testing.T) {
 	}
 }
 
-// TestSSE_ToolArgNotRestored is P3 for streaming: input_json_delta is a
-// tool-argument sink — the placeholder must NOT be rehydrated there.
+// TestSSE_ToolArgNotRestored is P3 for streaming: input_json_delta is a tool-argument sink — the placeholder must NOT be rehydrated there.
 func TestSSE_ToolArgNotRestored(t *testing.T) {
 	m := NewMapping()
 	ph := m.PutOrGet("sk-LIVE-DDDDDDDDDDDDDDDDDDDD")
@@ -170,8 +163,7 @@ func TestSSE_ToolArgNotRestored(t *testing.T) {
 	}
 }
 
-// TestSSE_PEMReEscaped: a restored multi-line/quote-bearing secret must be
-// re-escaped so the data line stays valid JSON and the SSE framing holds.
+// TestSSE_PEMReEscaped: a restored multi-line/quote-bearing secret must be re-escaped so the data line stays valid JSON and the SSE framing holds.
 func TestSSE_PEMReEscaped(t *testing.T) {
 	m := NewMapping()
 	secret := "-----BEGIN RSA PRIVATE KEY-----\nMIIE\"AB\n-----END RSA PRIVATE KEY-----"
@@ -182,8 +174,7 @@ func TestSSE_PEMReEscaped(t *testing.T) {
 	if got := sseDecodeText(t, out); !strings.Contains(got, secret) {
 		t.Errorf("PEM secret not round-tripped: decoded %q", got)
 	}
-	// No raw newline may appear inside the emitted JSON string (that would
-	// both corrupt the JSON and split the SSE event).
+	// No raw newline may appear inside the emitted JSON string (that would both corrupt the JSON and split the SSE event).
 	for _, ev := range strings.Split(out, "\n\n") {
 		if i := strings.Index(ev, "data: "); i >= 0 {
 			data := ev[i+len("data: "):]
@@ -200,8 +191,7 @@ func TestSSE_UnknownTokenPassthrough(t *testing.T) {
 	fabricated := MakePlaceholder(tok32('e'))
 	r := NewSSERestorer(m)
 	out := string(r.Write([]byte(sseTextEvent(0, "x "+fabricated+" y")))) + string(r.Final())
-	// The event passes through verbatim (brackets stay HTML-escaped on the
-	// wire); decoded, the fabricated token is intact and unresolved.
+	// The event passes through verbatim (brackets stay HTML-escaped on the wire); decoded, the fabricated token is intact and unresolved.
 	if got := sseDecodeText(t, out); !strings.Contains(got, fabricated) {
 		t.Errorf("unknown token should pass through verbatim, decoded %q", got)
 	}
@@ -256,8 +246,7 @@ func TestSSE_OpenAIToolCallNotRestored(t *testing.T) {
 	}
 }
 
-// TestSSE_PartialAtEndFlushes: a stream that ends mid-placeholder must not
-// drop the held bytes (and must not leak a real secret either).
+// TestSSE_PartialAtEndFlushes: a stream that ends mid-placeholder must not drop the held bytes (and must not leak a real secret either).
 func TestSSE_PartialAtEndFlushes(t *testing.T) {
 	m := NewMapping()
 	ph := m.PutOrGet("sk-real-GGGGGGGGGGGGGGGGGGGG")
@@ -272,8 +261,7 @@ func TestSSE_PartialAtEndFlushes(t *testing.T) {
 	}
 }
 
-// TestSSE_FlushAtBlockStop: a false-positive prefix held at the tail of a
-// block's last delta is flushed (not dropped) before the block stop.
+// TestSSE_FlushAtBlockStop: a false-positive prefix held at the tail of a block's last delta is flushed (not dropped) before the block stop.
 func TestSSE_FlushAtBlockStop(t *testing.T) {
 	m := NewMapping()
 	r := NewSSERestorer(m)
@@ -287,10 +275,7 @@ func TestSSE_FlushAtBlockStop(t *testing.T) {
 
 // ---- Gemini + Anthropic-thinking helpers ----------------------------------
 
-// sseGeminiEvent builds a Gemini streamGenerateContent data event from a
-// per-candidate list of part texts. JSON-encoded exactly like the gateway
-// (placeholder brackets HTML-escaped on the wire), so the restorer is
-// exercised on the decode→restore→re-encode path, not the raw bytes.
+// sseGeminiEvent builds a Gemini streamGenerateContent data event from a per-candidate list of part texts. JSON-encoded exactly like the gateway (placeholder brackets HTML-escaped on the wire), so the restorer is exercised on the decode→restore→re-encode path, not the raw bytes.
 func sseGeminiEvent(candidates [][]string) string {
 	cands := make([]any, 0, len(candidates))
 	for _, parts := range candidates {
@@ -304,8 +289,7 @@ func sseGeminiEvent(candidates [][]string) string {
 	return "data: " + string(b) + "\n\n"
 }
 
-// sseThinkingEvent builds an Anthropic content_block_delta/thinking_delta
-// event (extended-thinking display text), bracket-escaped like the gateway.
+// sseThinkingEvent builds an Anthropic content_block_delta/thinking_delta event (extended-thinking display text), bracket-escaped like the gateway.
 func sseThinkingEvent(idx int, thinking string) string {
 	b, _ := json.Marshal(map[string]any{
 		"type":  "content_block_delta",
@@ -315,11 +299,7 @@ func sseThinkingEvent(idx int, thinking string) string {
 	return "event: content_block_delta\ndata: " + string(b) + "\n\n"
 }
 
-// sseGeminiPartsByEvent returns the restored text of every
-// candidates[].content.parts[].text in the output, grouped per emitted
-// event (outer slice = events in order, inner = parts in array order).
-// Lets a caller pin which logical lane (part position) a fragment landed
-// in, so cross-part bleed is detectable.
+// sseGeminiPartsByEvent returns the restored text of every candidates[].content.parts[].text in the output, grouped per emitted event (outer slice = events in order, inner = parts in array order). Lets a caller pin which logical lane (part position) a fragment landed in, so cross-part bleed is detectable.
 func sseGeminiPartsByEvent(t *testing.T, out string) [][]string {
 	t.Helper()
 	var byEvent [][]string
@@ -380,8 +360,7 @@ func sseGeminiText(t *testing.T, out string) string {
 	return sb.String()
 }
 
-// sseThinkingText concatenates every restored delta.thinking fragment in
-// the output stream.
+// sseThinkingText concatenates every restored delta.thinking fragment in the output stream.
 func sseThinkingText(t *testing.T, out string) string {
 	t.Helper()
 	var sb strings.Builder
@@ -408,11 +387,7 @@ func sseThinkingText(t *testing.T, out string) string {
 
 // ---- Gemini candidate-part restore ----------------------------------------
 
-// TestSSE_GeminiPartRestore exercises the Gemini branch of displaySlots
-// (candidates[].content.parts[].text), which had zero coverage. A
-// placeholder embedded anywhere in a part's text must be restored to the
-// real secret on the decoded value (defeating the gateway's escaped
-// brackets) and re-encoded without breaking the JSON/SSE framing.
+// TestSSE_GeminiPartRestore exercises the Gemini branch of displaySlots (candidates[].content.parts[].text), which had zero coverage. A placeholder embedded anywhere in a part's text must be restored to the real secret on the decoded value (defeating the gateway's escaped brackets) and re-encoded without breaking the JSON/SSE framing.
 func TestSSE_GeminiPartRestore(t *testing.T) {
 	cases := []struct {
 		name string
@@ -443,10 +418,7 @@ func TestSSE_GeminiPartRestore(t *testing.T) {
 	}
 }
 
-// TestSSE_GeminiFunctionCallNotRestored: a part carrying a functionCall is
-// the Gemini tool-arg sink (P3) — its sibling args must never get a real
-// secret restored into them, even when a text part in the same candidate
-// is restored.
+// TestSSE_GeminiFunctionCallNotRestored: a part carrying a functionCall is the Gemini tool-arg sink (P3) — its sibling args must never get a real secret restored into them, even when a text part in the same candidate is restored.
 func TestSSE_GeminiFunctionCallNotRestored(t *testing.T) {
 	m := NewMapping()
 	ph := m.PutOrGet("sk-LIVE-gemini-DDDDDDDDDDDD")
@@ -465,13 +437,7 @@ func TestSSE_GeminiFunctionCallNotRestored(t *testing.T) {
 	}
 }
 
-// TestSSE_GeminiTwoPartsNoBleed is the per-(candidate,part) slot-keying
-// guard. One candidate streams TWO text parts (a thought + an answer),
-// each carrying its own placeholder split across two events so both parts
-// hold carryover simultaneously. The geminiPartStride keying must keep the
-// two parts' pending tails in distinct slots — if they collapsed to one
-// (e.g. keyed by the absent index field), part 1's held tail would
-// overwrite part 0's and neither placeholder would reassemble.
+// TestSSE_GeminiTwoPartsNoBleed is the per-(candidate,part) slot-keying guard. One candidate streams TWO text parts (a thought + an answer), each carrying its own placeholder split across two events so both parts hold carryover simultaneously. The geminiPartStride keying must keep the two parts' pending tails in distinct slots — if they collapsed to one (e.g. keyed by the absent index field), part 1's held tail would overwrite part 0's and neither placeholder would reassemble.
 func TestSSE_GeminiTwoPartsNoBleed(t *testing.T) {
 	m := NewMapping()
 	secretA := "sk-gemini-thought-1111111111111111"
@@ -512,8 +478,7 @@ func TestSSE_GeminiTwoPartsNoBleed(t *testing.T) {
 	if !strings.Contains(lb, secretB) {
 		t.Errorf("part 1 (answer) did not reassemble its own secret: %q", lb)
 	}
-	// The load-bearing assertion: neither part's restored text may contain
-	// the OTHER part's secret — that's the bleed the stride keying prevents.
+	// The load-bearing assertion: neither part's restored text may contain the OTHER part's secret — that's the bleed the stride keying prevents.
 	if strings.Contains(la, secretB) {
 		t.Errorf("part 1's secret bled into part 0: %q", la)
 	}
@@ -528,10 +493,7 @@ func TestSSE_GeminiTwoPartsNoBleed(t *testing.T) {
 
 // ---- Anthropic thinking_delta restore -------------------------------------
 
-// TestSSE_AnthropicThinkingDeltaRestore covers the thinking_delta branch of
-// displaySlots (extended-thinking display text), which had zero coverage.
-// A placeholder in delta.thinking is human-display text and must be
-// restored — including when split across two thinking events (carryover).
+// TestSSE_AnthropicThinkingDeltaRestore covers the thinking_delta branch of displaySlots (extended-thinking display text), which had zero coverage. A placeholder in delta.thinking is human-display text and must be restored — including when split across two thinking events (carryover).
 func TestSSE_AnthropicThinkingDeltaRestore(t *testing.T) {
 	t.Run("single event", func(t *testing.T) {
 		m := NewMapping()

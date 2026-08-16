@@ -8,11 +8,7 @@ import (
 	"strings"
 )
 
-// LogEntry is the buyer-visible subset of a backend log row. Drops
-// the marketplace split columns and the historical aggregation
-// fields — the CLI just needs "what model did I call, when, how
-// much did it cost". Full record is at /api/log/self if a caller
-// ever needs the rest.
+// LogEntry is the buyer-visible subset of a backend log row. Drops the marketplace split columns and the historical aggregation fields — the CLI just needs "what model did I call, when, how much did it cost". Full record is at /api/log/self if a caller ever needs the rest.
 type LogEntry struct {
 	ID               int    `json:"id"`
 	CreatedAt        int64  `json:"created_at"`
@@ -35,16 +31,14 @@ type LogEntry struct {
 	Other            string `json:"other"`
 }
 
-// LogStat mirrors the controller's {quota, rpm, tpm} envelope. Empty
-// window → all-time totals (server-side default for zero timestamps).
+// LogStat mirrors the controller's {quota, rpm, tpm} envelope. Empty window → all-time totals (server-side default for zero timestamps).
 type LogStat struct {
 	Quota int     `json:"quota"`
 	RPM   float64 `json:"rpm"`
 	TPM   float64 `json:"tpm"`
 }
 
-// ModelQuotaSummary mirrors backend model.ModelQuotaSummary. Used by
-// UserLogModelSummary for the per-upstream spend pie.
+// ModelQuotaSummary mirrors backend model.ModelQuotaSummary. Used by UserLogModelSummary for the per-upstream spend pie.
 type ModelQuotaSummary struct {
 	ModelName       string `json:"model_name"`
 	ChannelKindSlug string `json:"channel_kind_slug"`
@@ -52,9 +46,7 @@ type ModelQuotaSummary struct {
 	Count           int    `json:"count"`
 }
 
-// QuotaDay mirrors backend model.QuotaData — one row per (user,
-// model, day) returned by GetUserQuotaDates. The CLI usage command
-// renders these as a day-by-day spend timeline.
+// QuotaDay mirrors backend model.QuotaData — one row per (user, model, day) returned by GetUserQuotaDates. The CLI usage command renders these as a day-by-day spend timeline.
 type QuotaDay struct {
 	ID               int    `json:"id"`
 	UserID           int    `json:"user_id"`
@@ -69,8 +61,7 @@ type QuotaDay struct {
 	Quota            int    `json:"quota"`
 }
 
-// PricingRow is the buyer-visible subset of model.Pricing. Hides
-// admin-only ratios so the CLI doesn't accidentally render them.
+// PricingRow is the buyer-visible subset of model.Pricing. Hides admin-only ratios so the CLI doesn't accidentally render them.
 type PricingRow struct {
 	ModelName       string  `json:"model_name"`
 	VendorID        int     `json:"vendor_id,omitempty"`
@@ -81,21 +72,14 @@ type PricingRow struct {
 	OwnerBy         string  `json:"owner_by,omitempty"`
 }
 
-// Pricing wraps the /api/pricing payload: the rate sheet, the
-// caller's group→ratio map, and which groups they're allowed to
-// route through. supported_endpoint + vendors + auto_groups are
-// dropped — adding them is a one-field SDK change when a CLI needs
-// them.
+// Pricing wraps the /api/pricing payload: the rate sheet, the caller's group→ratio map, and which groups they're allowed to route through. supported_endpoint + vendors + auto_groups are dropped — adding them is a one-field SDK change when a CLI needs them.
 type Pricing struct {
 	Rows        []PricingRow       `json:"data"`
 	GroupRatio  map[string]float64 `json:"group_ratio"`
 	UsableGroup map[string]string  `json:"usable_group"`
 }
 
-// GroupInfo is one canonical route-group entity from /api/user/groups.
-// ID is the stable routing/billing key, Name is display-only, and Usable is
-// the caller-specific permission projection. Ratio is numeric for concrete
-// groups and a label for the synthetic "auto" entry, hence `any`.
+// GroupInfo is one canonical route-group entity from /api/user/groups. ID is the stable routing/billing key, Name is display-only, and Usable is the caller-specific permission projection. Ratio is numeric for concrete groups and a label for the synthetic "auto" entry, hence `any`.
 type GroupInfo struct {
 	ID     string `json:"id"`
 	Name   string `json:"name"`
@@ -103,10 +87,7 @@ type GroupInfo struct {
 	Usable bool   `json:"usable"`
 }
 
-// LogFilter narrows ListUserLogs. Zero fields mean "no constraint".
-// The backend serializes start/end timestamps as Unix seconds and
-// returns the first page only — pagination beyond that needs the
-// PageInfo plumbing, which is a separate follow-up.
+// LogFilter narrows ListUserLogs. Zero fields mean "no constraint". The backend serializes start/end timestamps as Unix seconds and returns the first page only — pagination beyond that needs the PageInfo plumbing, which is a separate follow-up.
 type LogFilter struct {
 	Type      int
 	Start     int64
@@ -154,10 +135,7 @@ func (f LogFilter) query() string {
 	return ""
 }
 
-// ListUserLogs returns the caller's own logs page. Returns the
-// items, the total row count for the filter (server-side), and any
-// error. The server caps page_size and the SDK does NOT iterate;
-// pass an explicit Page/PageSize to step through.
+// ListUserLogs returns the caller's own logs page. Returns the items, the total row count for the filter (server-side), and any error. The server caps page_size and the SDK does NOT iterate; pass an explicit Page/PageSize to step through.
 func (c *Client) ListUserLogs(ctx context.Context, f LogFilter) ([]LogEntry, int, error) {
 	var env struct {
 		Success bool   `json:"success"`
@@ -176,8 +154,7 @@ func (c *Client) ListUserLogs(ctx context.Context, f LogFilter) ([]LogEntry, int
 	return env.Data.Items, env.Data.Total, nil
 }
 
-// SelfLogStat is the {quota, rpm, tpm} totals for the same filter
-// shape ListUserLogs accepts. Pagination fields are ignored.
+// SelfLogStat is the {quota, rpm, tpm} totals for the same filter shape ListUserLogs accepts. Pagination fields are ignored.
 func (c *Client) SelfLogStat(ctx context.Context, f LogFilter) (*LogStat, error) {
 	var env struct {
 		Success bool    `json:"success"`
@@ -195,9 +172,7 @@ func (c *Client) SelfLogStat(ctx context.Context, f LogFilter) (*LogStat, error)
 	return &env.Data, nil
 }
 
-// UserLogModelSummary returns the per-model spend over [start, end]
-// (Unix seconds). Backend caps window at 30 days; longer windows
-// surface the server's "时间跨度不能超过 1 个月" message verbatim.
+// UserLogModelSummary returns the per-model spend over [start, end] (Unix seconds). Backend caps window at 30 days; longer windows surface the server's "时间跨度不能超过 1 个月" message verbatim.
 func (c *Client) UserLogModelSummary(ctx context.Context, start, end int64) ([]ModelQuotaSummary, error) {
 	v := url.Values{}
 	if start != 0 {
@@ -224,8 +199,7 @@ func (c *Client) UserLogModelSummary(ctx context.Context, start, end int64) ([]M
 	return env.Data, nil
 }
 
-// UserQuotaDates returns the day-by-day quota_data rows for the
-// caller over [start, end]. Same 30-day cap as UserLogModelSummary.
+// UserQuotaDates returns the day-by-day quota_data rows for the caller over [start, end]. Same 30-day cap as UserLogModelSummary.
 func (c *Client) UserQuotaDates(ctx context.Context, start, end int64) ([]QuotaDay, error) {
 	v := url.Values{}
 	if start != 0 {
@@ -252,17 +226,13 @@ func (c *Client) UserQuotaDates(ctx context.Context, start, end int64) ([]QuotaD
 	return env.Data, nil
 }
 
-// UserModel is one model the caller's group can route to, with its
-// vendor (provider display name, e.g. "Anthropic"). Vendor is "" when
-// the model has no known vendor — callers can group those as "Other".
+// UserModel is one model the caller's group can route to, with its vendor (provider display name, e.g. "Anthropic"). Vendor is "" when the model has no known vendor — callers can group those as "Other".
 type UserModel struct {
 	ID     string `json:"id"`
 	Vendor string `json:"vendor"`
 }
 
-// UserModels returns the models the caller's group can route to, each
-// with its vendor. Filters out any blank entries the backend's defensive
-// pass missed — callers shouldn't have to dedupe "".
+// UserModels returns the models the caller's group can route to, each with its vendor. Filters out any blank entries the backend's defensive pass missed — callers shouldn't have to dedupe "".
 func (c *Client) UserModels(ctx context.Context) ([]UserModel, error) {
 	var env struct {
 		Success bool        `json:"success"`
@@ -284,31 +254,19 @@ func (c *Client) UserModels(ctx context.Context) ([]UserModel, error) {
 	return out, nil
 }
 
-// UserGroups returns every configured route-group entity keyed by stable ID,
-// as an ANONYMOUS caller sees it. Callers display Name, send ID on the wire,
-// and offer only Usable entities for new selections. The special "auto" entity
-// is included when configured.
+// UserGroups returns every configured route-group entity keyed by stable ID, as an ANONYMOUS caller sees it. Callers display Name, send ID on the wire, and offer only Usable entities for new selections. The special "auto" entity is included when configured.
 //
-// /api/user/groups is mounted outside UserAuth, so the backend resolves it with
-// user id 0 even when a credential is attached: Usable and Ratio describe the
-// anonymous tier, not the signed-in account. Anything gating on what THIS
-// account may do — offering a group, predicting whether a create will be
-// accepted — must call SelfGroups instead.
+// /api/user/groups is mounted outside UserAuth, so the backend resolves it with user id 0 even when a credential is attached: Usable and Ratio describe the anonymous tier, not the signed-in account. Anything gating on what THIS account may do — offering a group, predicting whether a create will be accepted — must call SelfGroups instead.
 func (c *Client) UserGroups(ctx context.Context) (map[string]GroupInfo, error) {
 	return c.routeGroups(ctx, "/api/user/groups")
 }
 
-// SelfGroups returns the same entities projected onto the SIGNED-IN account:
-// Usable answers "may this account point a key at that group", which is the
-// question the gateway asks when it validates a token create. Needs a
-// management credential — the mount is behind UserAuth.
+// SelfGroups returns the same entities projected onto the SIGNED-IN account: Usable answers "may this account point a key at that group", which is the question the gateway asks when it validates a token create. Needs a management credential — the mount is behind UserAuth.
 func (c *Client) SelfGroups(ctx context.Context) (map[string]GroupInfo, error) {
 	return c.routeGroups(ctx, "/api/user/self/groups")
 }
 
-// autoGroupUsable answers whether this account may point a key at the auto
-// group, per the same CanUserUseAutoGroup the gateway enforces when validating
-// a token create and when expanding "auto" into a pool list.
+// autoGroupUsable answers whether this account may point a key at the auto group, per the same CanUserUseAutoGroup the gateway enforces when validating a token create and when expanding "auto" into a pool list.
 func (c *Client) autoGroupUsable(ctx context.Context) (bool, error) {
 	groups, err := c.SelfGroups(ctx)
 	if err != nil {
@@ -329,12 +287,7 @@ func (c *Client) routeGroups(ctx context.Context, path string) (map[string]Group
 	if !env.Success {
 		return nil, errors.New(env.Message)
 	}
-	// A mismatched ID means the shape is wrong and nothing in the map can be
-	// trusted. A blank NAME is a per-entity gap, not a broken response: the
-	// authenticated mount also returns pools the caller cannot select, and a
-	// pool with a ratio but no entry in the usable-groups display map resolves
-	// to "". Rejecting the whole map for one of those took down every caller —
-	// drop the unnamed entity and keep the rest.
+	// A mismatched ID means the shape is wrong and nothing in the map can be trusted. A blank NAME is a per-entity gap, not a broken response: the authenticated mount also returns pools the caller cannot select, and a pool with a ratio but no entry in the usable-groups display map resolves to "". Rejecting the whole map for one of those took down every caller — drop the unnamed entity and keep the rest.
 	for id, group := range env.Data {
 		if group.ID != id {
 			return nil, errors.New("invalid route group response")
@@ -346,17 +299,12 @@ func (c *Client) routeGroups(ctx context.Context, path string) (map[string]Group
 	return env.Data, nil
 }
 
-// GetPricing reads the public /api/pricing endpoint. Backend
-// applies the caller's group filter automatically when the
-// Authorization header is set (TryUserAuth), so anonymous and
-// authenticated calls return different slices of rows.
+// GetPricing reads the public /api/pricing endpoint. Backend applies the caller's group filter automatically when the Authorization header is set (TryUserAuth), so anonymous and authenticated calls return different slices of rows.
 func (c *Client) GetPricing(ctx context.Context) (*Pricing, error) {
 	var env Pricing
 	env.GroupRatio = map[string]float64{}
 	env.UsableGroup = map[string]string{}
-	// /api/pricing wraps fields at the top level of the response
-	// (data, group_ratio, usable_group, …) — no `success` envelope.
-	// The standalone struct is what we want; decode straight into it.
+	// /api/pricing wraps fields at the top level of the response (data, group_ratio, usable_group, …) — no `success` envelope. The standalone struct is what we want; decode straight into it.
 	if err := c.do(ctx, "GET", "/api/pricing", nil, &env); err != nil {
 		return nil, err
 	}

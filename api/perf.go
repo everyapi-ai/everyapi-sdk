@@ -1,9 +1,4 @@
-// Performance-metrics SDK: GET /api/perf-metrics/summary. A per-model
-// rollup (latency / success rate / throughput) of the gateway's own
-// relay traffic — complements GetUpstreamStatus (provider-side health).
-// The endpoint is admin-only (it exposes internal upstream channel
-// topology and runs heavy log scans), so callers must pass admin
-// credentials; an empty bearer is rejected with 401.
+// Performance-metrics SDK: GET /api/perf-metrics/summary. A per-model rollup (latency / success rate / throughput) of the gateway's own relay traffic — complements GetUpstreamStatus (provider-side health). The endpoint is admin-only (it exposes internal upstream channel topology and runs heavy log scans), so callers must pass admin credentials; an empty bearer is rejected with 401.
 package api
 
 import (
@@ -13,9 +8,7 @@ import (
 	"strconv"
 )
 
-// ModelPerf is one model's performance summary. AvgLatencyMs is the
-// mean end-to-end latency; SuccessRate is a percentage (0–100); AvgTps
-// is output tokens/sec; RequestCount is the sample size over the window.
+// ModelPerf is one model's performance summary. AvgLatencyMs is the mean end-to-end latency; SuccessRate is a percentage (0–100); AvgTps is output tokens/sec; RequestCount is the sample size over the window.
 type ModelPerf struct {
 	ModelName    string  `json:"model_name"`
 	AvgLatencyMs int64   `json:"avg_latency_ms"`
@@ -24,8 +17,7 @@ type ModelPerf struct {
 	RequestCount int64   `json:"request_count"`
 }
 
-// GetPerfSummary reads GET /api/perf-metrics/summary for the last
-// `hours` (<=0 lets the backend default to 24h).
+// GetPerfSummary reads GET /api/perf-metrics/summary for the last `hours` (<=0 lets the backend default to 24h).
 func (c *Client) GetPerfSummary(ctx context.Context, hours int) ([]ModelPerf, error) {
 	path := "/api/perf-metrics/summary"
 	if hours > 0 {

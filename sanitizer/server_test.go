@@ -18,17 +18,13 @@ import (
 	"time"
 )
 
-// startServer spins up a Server bound to an ephemeral port pointing
-// at the given upstream URL. Returns the proxy base ("http://...")
-// and a stop func.
+// startServer spins up a Server bound to an ephemeral port pointing at the given upstream URL. Returns the proxy base ("http://...") and a stop func.
 func startServer(t *testing.T, upstream string) (string, *Server, func()) {
 	t.Helper()
 	return startServerCfg(t, Config{UpstreamBase: upstream})
 }
 
-// startServerCfg is startServer with caller-supplied Config knobs
-// (logger capture, AllowNonLoopback, …). Listen + a discard logger are
-// filled in when the caller leaves them zero.
+// startServerCfg is startServer with caller-supplied Config knobs (logger capture, AllowNonLoopback, …). Listen + a discard logger are filled in when the caller leaves them zero.
 func startServerCfg(t *testing.T, cfg Config) (string, *Server, func()) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -73,8 +69,7 @@ func startServerCfg(t *testing.T, cfg Config) (string, *Server, func()) {
 }
 
 func TestServer_RewritesAnthropicRequest(t *testing.T) {
-	// Upstream that echoes the request body so the test can assert
-	// what bytes the proxy actually forwarded.
+	// Upstream that echoes the request body so the test can assert what bytes the proxy actually forwarded.
 	var got []byte
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -147,14 +142,11 @@ func (zeroReader) Read(p []byte) (int, error) {
 }
 
 func TestServer_RestoresInResponse(t *testing.T) {
-	// Upstream that responds with the placeholder embedded — the
-	// proxy must restore it on the way out so the SDK sees the
-	// original secret.
+	// Upstream that responds with the placeholder embedded — the proxy must restore it on the way out so the SDK sees the original secret.
 	var capturedPlaceholder string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		// Pull the placeholder out of the request body, then echo
-		// it back in the response.
+		// Pull the placeholder out of the request body, then echo it back in the response.
 		idxs := FindPlaceholders(string(body))
 		if len(idxs) == 0 {
 			http.Error(w, "no placeholder", 400)
@@ -190,8 +182,7 @@ func TestServer_RestoresInResponse(t *testing.T) {
 }
 
 func TestServer_StreamingSSE(t *testing.T) {
-	// Upstream streams two SSE events, with the placeholder split
-	// across the chunk boundary.
+	// Upstream streams two SSE events, with the placeholder split across the chunk boundary.
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		idx := FindPlaceholders(string(body))
@@ -233,8 +224,7 @@ func TestServer_StreamingSSE(t *testing.T) {
 }
 
 func TestServer_PassesNonJSONThrough(t *testing.T) {
-	// e.g. /v1/audio/speech with multipart body — proxy should
-	// forward unchanged.
+	// e.g. /v1/audio/speech with multipart body — proxy should forward unchanged.
 	var got []byte
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got, _ = io.ReadAll(r.Body)
@@ -294,19 +284,9 @@ func TestServer_HealthEndpoint(t *testing.T) {
 	}
 }
 
-// TestServer_ContentLengthAfterRewrite reproduces the bug from PR
-// #212's self-review: when the proxy sanitises a response that
-// originally carried a Content-Length header, the placeholder→real
-// expansion grows the body, but the un-touched Content-Length header
-// would tell the client to stop reading too early. The fix is to
-// strip Content-Length on rewritten responses; this test confirms
-// strict clients read the whole body.
+// TestServer_ContentLengthAfterRewrite reproduces the bug from PR #212's self-review: when the proxy sanitises a response that originally carried a Content-Length header, the placeholder→real expansion grows the body, but the un-touched Content-Length header would tell the client to stop reading too early. The fix is to strip Content-Length on rewritten responses; this test confirms strict clients read the whole body.
 func TestServer_ContentLengthAfterRewrite(t *testing.T) {
-	// 50+ char OpenAI key: longer than the placeholder string
-	// (25 chars), so the restored body is LARGER than what the
-	// upstream's Content-Length header said. A naive proxy that
-	// forwards the Content-Length unchanged would cause the
-	// client to truncate the body at the original byte count.
+	// 50+ char OpenAI key: longer than the placeholder string (25 chars), so the restored body is LARGER than what the upstream's Content-Length header said. A naive proxy that forwards the Content-Length unchanged would cause the client to truncate the body at the original byte count.
 	const secret = "sk-proj-abcdefghijklmnopqrstuvwxyz1234567890ABCDEFGHIJKLMNOP"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -345,17 +325,13 @@ func TestServer_ContentLengthAfterRewrite(t *testing.T) {
 	}
 }
 
-// TestServer_BinaryPassthrough — image/png response bodies must
-// reach the client byte-for-byte. Running them through the
-// StreamingReplacer would waste CPU and risk chunk-boundary
-// buffering on realtime binary streams.
+// TestServer_BinaryPassthrough — image/png response bodies must reach the client byte-for-byte. Running them through the StreamingReplacer would waste CPU and risk chunk-boundary buffering on realtime binary streams.
 func TestServer_BinaryPassthrough(t *testing.T) {
 	binary := make([]byte, 4096)
 	for i := range binary {
 		binary[i] = byte(i ^ 0xa5)
 	}
-	// Bury the placeholder-prefix substring inside the binary to
-	// prove the bypass keys on Content-Type, not on content scan.
+	// Bury the placeholder-prefix substring inside the binary to prove the bypass keys on Content-Type, not on content scan.
 	copy(binary[1024:], []byte(PlaceholderPrefix+"099"+PlaceholderSuffix))
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "image/png")
@@ -377,12 +353,7 @@ func TestServer_BinaryPassthrough(t *testing.T) {
 	}
 }
 
-// TestServer_IgnoresHTTPProxyEnv covers bug #2 — the upstream
-// client must not honour HTTP_PROXY / HTTPS_PROXY env vars (a
-// hostile env var would tunnel sensitive bytes through an
-// attacker before they reach the gateway). Point the env at a
-// black-hole port; the proxy should still reach upstream because
-// it ignores the env.
+// TestServer_IgnoresHTTPProxyEnv covers bug #2 — the upstream client must not honour HTTP_PROXY / HTTPS_PROXY env vars (a hostile env var would tunnel sensitive bytes through an attacker before they reach the gateway). Point the env at a black-hole port; the proxy should still reach upstream because it ignores the env.
 func TestServer_IgnoresHTTPProxyEnv(t *testing.T) {
 	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1")
 	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")
@@ -439,8 +410,7 @@ func TestNew_NonLoopbackGatedByAllowFlag(t *testing.T) {
 }
 
 func TestServer_GzipRequestBodySanitized(t *testing.T) {
-	// A client that gzips its request body must NOT leak the secret:
-	// the proxy has to inflate, scan, and forward an identity body.
+	// A client that gzips its request body must NOT leak the secret: the proxy has to inflate, scan, and forward an identity body.
 	var gotBody []byte
 	var gotEnc string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -485,8 +455,7 @@ func TestServer_GzipRequestBodySanitized(t *testing.T) {
 }
 
 func TestServer_UnsupportedRequestEncodingFailsClosed(t *testing.T) {
-	// brotli isn't stdlib-decodable — the proxy must REFUSE rather
-	// than forward an opaque body it couldn't scan.
+	// brotli isn't stdlib-decodable — the proxy must REFUSE rather than forward an opaque body it couldn't scan.
 	hit := false
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hit = true
@@ -515,9 +484,7 @@ func TestServer_UnsupportedRequestEncodingFailsClosed(t *testing.T) {
 }
 
 func TestServer_GzipResponseRestored(t *testing.T) {
-	// Upstream answers with a gzip-compressed body embedding the
-	// placeholder. The proxy must decode it so the restorer runs and
-	// the SDK sees the real secret, not a raw placeholder.
+	// Upstream answers with a gzip-compressed body embedding the placeholder. The proxy must decode it so the restorer runs and the SDK sees the real secret, not a raw placeholder.
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		idx := FindPlaceholders(string(body))
@@ -552,10 +519,7 @@ func TestServer_GzipResponseRestored(t *testing.T) {
 	}
 }
 
-// TestServer_RestoresEscapedJSONResponse is the realistic escaped-bracket
-// path: the upstream marshals its JSON response with the stdlib encoder
-// (which HTML-escapes the placeholder brackets), exactly like the gateway.
-// The structure-aware restorer must still resolve it.
+// TestServer_RestoresEscapedJSONResponse is the realistic escaped-bracket path: the upstream marshals its JSON response with the stdlib encoder (which HTML-escapes the placeholder brackets), exactly like the gateway. The structure-aware restorer must still resolve it.
 func TestServer_RestoresEscapedJSONResponse(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -591,8 +555,7 @@ func TestServer_RestoresEscapedJSONResponse(t *testing.T) {
 	}
 }
 
-// TestServer_RestoresNDJSONResponse covers the P4 content-type gap: an
-// application/x-ndjson response previously bypassed the restorer.
+// TestServer_RestoresNDJSONResponse covers the P4 content-type gap: an application/x-ndjson response previously bypassed the restorer.
 func TestServer_RestoresNDJSONResponse(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -625,8 +588,7 @@ func TestServer_RestoresNDJSONResponse(t *testing.T) {
 	}
 }
 
-// TestServer_RestoresPlusJSONResponse covers the +json suffix family
-// (application/vnd.api+json, application/problem+json).
+// TestServer_RestoresPlusJSONResponse covers the +json suffix family (application/vnd.api+json, application/problem+json).
 func TestServer_RestoresPlusJSONResponse(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -659,10 +621,7 @@ func TestServer_RestoresPlusJSONResponse(t *testing.T) {
 	}
 }
 
-// TestServer_RestoresOnNonProtocolPath covers the defect where restore was
-// gated on the request path matching a protocol: a placeholder echoed on a
-// path the proxy doesn't recognise must still be restored, because the
-// mapping is process-global.
+// TestServer_RestoresOnNonProtocolPath covers the defect where restore was gated on the request path matching a protocol: a placeholder echoed on a path the proxy doesn't recognise must still be restored, because the mapping is process-global.
 func TestServer_RestoresOnNonProtocolPath(t *testing.T) {
 	var captured string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -736,13 +695,7 @@ func TestServer_NonJSONOnSanitisablePathWarns(t *testing.T) {
 	}
 }
 
-// TestServer_MiddlewareWrapsRelayButNotControlEndpoints pins the contract an
-// in-process caller relies on to host its own transforms here instead of
-// chaining a second loopback proxy in front: the middleware sees relay traffic,
-// can short-circuit it, and can hand the rest to the sanitizer — but never
-// intercepts /__sanitizer/*. A middleware that shadowed the health endpoint
-// would hang the caller's readiness probe, and one that shadowed status would
-// break `everyapi proxy status`.
+// TestServer_MiddlewareWrapsRelayButNotControlEndpoints pins the contract an in-process caller relies on to host its own transforms here instead of chaining a second loopback proxy in front: the middleware sees relay traffic, can short-circuit it, and can hand the rest to the sanitizer — but never intercepts /__sanitizer/*. A middleware that shadowed the health endpoint would hang the caller's readiness probe, and one that shadowed status would break `everyapi proxy status`.
 func TestServer_MiddlewareWrapsRelayButNotControlEndpoints(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

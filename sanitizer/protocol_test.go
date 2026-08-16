@@ -133,8 +133,7 @@ func TestGemini_RewriteRequest(t *testing.T) {
 }
 
 func TestGemini_InlineDataPreserved(t *testing.T) {
-	// `inlineData.data` is base64 — must NOT be sanitised even if a
-	// substring incidentally resembles a key.
+	// `inlineData.data` is base64 — must NOT be sanitised even if a substring incidentally resembles a key.
 	preserved := "AKIAIOSFODNN7EXAMPLEdataYWFhYWFhYQ=="
 	body := mustJSON(t, map[string]any{
 		"contents": []any{
@@ -158,9 +157,7 @@ func TestGemini_InlineDataPreserved(t *testing.T) {
 	}
 }
 
-// TestDefaultDetectors_NoNumericFalsePositives is the P5 negative test: a
-// millisecond timestamp and a Discord/Snowflake id must NOT be masked by
-// the DEFAULT detector set (the numeric checksum detectors are opt-in).
+// TestDefaultDetectors_NoNumericFalsePositives is the P5 negative test: a millisecond timestamp and a Discord/Snowflake id must NOT be masked by the DEFAULT detector set (the numeric checksum detectors are opt-in).
 func TestDefaultDetectors_NoNumericFalsePositives(t *testing.T) {
 	const msTimestamp = "1719331200000"  // Date.now()-shaped, 13 digits
 	const snowflake = "1099511627776123" // Discord/Snowflake-shaped
@@ -184,10 +181,7 @@ func TestDefaultDetectors_NoNumericFalsePositives(t *testing.T) {
 	}
 }
 
-// TestAnthropic_BinarySourceDataPreserved mirrors TestGemini_InlineDataPreserved
-// for the Anthropic image/document shape: source.data base64 must never be
-// scanned, even with the numeric detectors enabled and a Luhn-valid run
-// embedded in the blob.
+// TestAnthropic_BinarySourceDataPreserved mirrors TestGemini_InlineDataPreserved for the Anthropic image/document shape: source.data base64 must never be scanned, even with the numeric detectors enabled and a Luhn-valid run embedded in the blob.
 func TestAnthropic_BinarySourceDataPreserved(t *testing.T) {
 	preserved := "AAAA/4111111111111111+BBBBdataYWFh=="
 	body := mustJSON(t, map[string]any{
@@ -210,8 +204,7 @@ func TestAnthropic_BinarySourceDataPreserved(t *testing.T) {
 	}
 }
 
-// TestOpenAI_ImageURLDataURLPreserved: an image_url.url data: URL is binary
-// and must not be scanned.
+// TestOpenAI_ImageURLDataURLPreserved: an image_url.url data: URL is binary and must not be scanned.
 func TestOpenAI_ImageURLDataURLPreserved(t *testing.T) {
 	dataURL := "data:image/png;base64,AAAA/4111111111111111+BBBB=="
 	body := mustJSON(t, map[string]any{
@@ -231,9 +224,7 @@ func TestOpenAI_ImageURLDataURLPreserved(t *testing.T) {
 	}
 }
 
-// TestAnthropic_ToolNameNotMasked: a tool's `name` is a routing identifier
-// — masking it corrupts the schema / 400s the request. Even a key-shaped
-// name must pass through.
+// TestAnthropic_ToolNameNotMasked: a tool's `name` is a routing identifier — masking it corrupts the schema / 400s the request. Even a key-shaped name must pass through.
 func TestAnthropic_ToolNameNotMasked(t *testing.T) {
 	keyShaped := "sk-ant-foo_abcdefghijklmnopqrstuvwxyz1234"
 	body := mustJSON(t, map[string]any{
@@ -246,9 +237,7 @@ func TestAnthropic_ToolNameNotMasked(t *testing.T) {
 	}
 }
 
-// TestRewriteJSONBody_CleanBodyByteIdentical is P6: a body where no
-// detector fires returns the ORIGINAL bytes unchanged (key order + cache
-// key preserved).
+// TestRewriteJSONBody_CleanBodyByteIdentical is P6: a body where no detector fires returns the ORIGINAL bytes unchanged (key order + cache key preserved).
 func TestRewriteJSONBody_CleanBodyByteIdentical(t *testing.T) {
 	body := []byte(`{"model":"gpt-4o","messages":[{"role":"user","content":"hello world"}],"temperature":0.7}`)
 	out, err := (&OpenAIProtocol{}).RewriteRequest(body, BuiltinDetectors(), NewMapping())
@@ -260,9 +249,7 @@ func TestRewriteJSONBody_CleanBodyByteIdentical(t *testing.T) {
 	}
 }
 
-// TestRewriteJSONBody_LargeIntSurvives is P6: when a rewrite does happen,
-// an integer beyond 2^53 must round-trip via UseNumber rather than being
-// mangled through float64.
+// TestRewriteJSONBody_LargeIntSurvives is P6: when a rewrite does happen, an integer beyond 2^53 must round-trip via UseNumber rather than being mangled through float64.
 func TestRewriteJSONBody_LargeIntSurvives(t *testing.T) {
 	const bigInt = "9007199254740993" // 2^53 + 1
 	body := []byte(`{"seed":` + bigInt + `,"messages":[{"role":"user","content":"key sk-proj-abcdefghijklmnopqrstuvwxyz1234567890"}]}`)
@@ -279,8 +266,7 @@ func TestRewriteJSONBody_LargeIntSurvives(t *testing.T) {
 }
 
 func TestRewrite_PassthroughOnNonJSON(t *testing.T) {
-	// Multipart bodies and other non-JSON content must not be parsed
-	// or modified. The proxy still forwards them unchanged.
+	// Multipart bodies and other non-JSON content must not be parsed or modified. The proxy still forwards them unchanged.
 	body := []byte("--boundary\r\nContent-Disposition: form-data; name=x\r\n\r\nsk-proj-abcdefghijklmnopqrstuvwxyz1234567890\r\n--boundary--")
 	p := &OpenAIProtocol{}
 	out, err := p.RewriteRequest(body, BuiltinDetectors(), m_noopMapping())

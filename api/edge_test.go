@@ -9,12 +9,7 @@ import (
 )
 
 func TestCreateEdgeNode(t *testing.T) {
-	// Decode the request against an inline struct that mirrors the
-	// BACKEND-side wire format (backend/pkg/edge.Location uses
-	// `country_iso2`, not `country`). Decoding into the SDK's own
-	// EdgeNodeCreate would round-trip cleanly even if the SDK reverted
-	// to the buggy `country` tag, so the contract test would silently
-	// pass while real registers drop the field on the wire.
+	// Decode the request against an inline struct that mirrors the BACKEND-side wire format (backend/pkg/edge.Location uses `country_iso2`, not `country`). Decoding into the SDK's own EdgeNodeCreate would round-trip cleanly even if the SDK reverted to the buggy `country` tag, so the contract test would silently pass while real registers drop the field on the wire.
 	gotLocation := struct {
 		CountryISO2 string `json:"country_iso2"`
 		Region      string `json:"region"`
@@ -65,13 +60,7 @@ func TestCreateEdgeNode(t *testing.T) {
 	}
 }
 
-// TestEdgeLocFullWireFormat pins every Location field on the wire,
-// not just country_iso2 + region. The round-1 fix expanded EdgeLoc to
-// include Latitude/Longitude (matching backend pkg/edge.Location);
-// without this test a typo like `json:"lattitude"` would round-trip
-// cleanly through the SDK's own struct and reach prod silently,
-// exactly the failure mode the original country/country_iso2 drift
-// hit. Decodes against an inline backend-shape struct on purpose.
+// TestEdgeLocFullWireFormat pins every Location field on the wire, not just country_iso2 + region. The round-1 fix expanded EdgeLoc to include Latitude/Longitude (matching backend pkg/edge.Location); without this test a typo like `json:"lattitude"` would round-trip cleanly through the SDK's own struct and reach prod silently, exactly the failure mode the original country/country_iso2 drift hit. Decodes against an inline backend-shape struct on purpose.
 func TestEdgeLocFullWireFormat(t *testing.T) {
 	want := struct {
 		CountryISO2 string  `json:"country_iso2"`
@@ -113,11 +102,7 @@ func TestEdgeLocFullWireFormat(t *testing.T) {
 	}
 }
 
-// TestEdgeHWFullWireFormat is the same drift guard for EdgeHW. Hardware
-// is agent-reported and decoded on the read path (list / status); a tag
-// typo would silently zero the field in dashboard renders. We exercise
-// the decode side by replaying a backend-shaped JSON payload into the
-// SDK's ListEdgeNodes and asserting every field round-trips.
+// TestEdgeHWFullWireFormat is the same drift guard for EdgeHW. Hardware is agent-reported and decoded on the read path (list / status); a tag typo would silently zero the field in dashboard renders. We exercise the decode side by replaying a backend-shaped JSON payload into the SDK's ListEdgeNodes and asserting every field round-trips.
 func TestEdgeHWFullWireFormat(t *testing.T) {
 	const hwJSON = `{
 		"gpu_model":     "NVIDIA GeForce RTX 4090",
@@ -169,14 +154,7 @@ func TestEdgeHWFullWireFormat(t *testing.T) {
 	}
 }
 
-// TestEdgeNodeTelemetryWireFormat pins the live-telemetry fields on
-// EdgeNode (gpu_util_pct / vram_used_gb / active_requests) plus
-// created_at — the backend's edgeNodeView surfaces them but the SDK
-// originally only decoded the static metadata. Same drift-guard
-// shape as TestEdgeHWFullWireFormat: replay a backend-shaped JSON
-// blob into ListEdgeNodes and assert every field round-trips with
-// the right TYPE (the omitempty pointers distinguish "not reported"
-// nil from a meaningful zero value).
+// TestEdgeNodeTelemetryWireFormat pins the live-telemetry fields on EdgeNode (gpu_util_pct / vram_used_gb / active_requests) plus created_at — the backend's edgeNodeView surfaces them but the SDK originally only decoded the static metadata. Same drift-guard shape as TestEdgeHWFullWireFormat: replay a backend-shaped JSON blob into ListEdgeNodes and assert every field round-trips with the right TYPE (the omitempty pointers distinguish "not reported" nil from a meaningful zero value).
 func TestEdgeNodeTelemetryWireFormat(t *testing.T) {
 	const nodeJSON = `{
 		"id":              1,
@@ -218,16 +196,7 @@ func TestEdgeNodeTelemetryWireFormat(t *testing.T) {
 	}
 }
 
-// TestEdgeNodeTelemetryPartialReport pins the per-field decode shape:
-// the current backend (viewEdgeNode in edge_node.go) assigns all
-// three live fields together off the same heartbeat snapshot, so a
-// mixed-nil response can't happen today. But the CLI and MCP
-// renderers branch per-field on nil, on the (defensive) assumption
-// that a future backend split — e.g. active_requests becoming
-// optional or computed elsewhere — might emit only some of the
-// three. This test pins that behavior: when the backend reports
-// only gpu_util_pct, the SDK MUST leave the other two pointers nil
-// so renderers omit them cleanly rather than rendering 0.
+// TestEdgeNodeTelemetryPartialReport pins the per-field decode shape: the current backend (viewEdgeNode in edge_node.go) assigns all three live fields together off the same heartbeat snapshot, so a mixed-nil response can't happen today. But the CLI and MCP renderers branch per-field on nil, on the (defensive) assumption that a future backend split — e.g. active_requests becoming optional or computed elsewhere — might emit only some of the three. This test pins that behavior: when the backend reports only gpu_util_pct, the SDK MUST leave the other two pointers nil so renderers omit them cleanly rather than rendering 0.
 func TestEdgeNodeTelemetryPartialReport(t *testing.T) {
 	const nodeJSON = `{
 		"id":           3,
@@ -263,17 +232,7 @@ func TestEdgeNodeTelemetryPartialReport(t *testing.T) {
 	}
 }
 
-// TestEdgeNodeTelemetryZeroValuesOnIdleNode is the missing-vs-zero
-// contract test the SDK doc and specs/edge-node.md rest on. The backend
-// viewEdgeNode assigns the three live pointers inside its
-// `ReceivedAt > 0` branch unconditionally, so an idle but
-// online+heartbeating node emits e.g. `gpu_util_pct: 0` — the JSON
-// key is PRESENT with value 0, NOT omitted. The SDK must surface
-// `*GPUUtilPct == 0` (non-nil pointer to zero), distinct from the
-// offline case where the key is omitted entirely (nil pointer).
-// Without this, a CLI / dashboard rendering "GPU 0%" for a busy
-// node and "no live data" for an idle one would collapse into the
-// same nil branch and the seller would lose the distinction.
+// TestEdgeNodeTelemetryZeroValuesOnIdleNode is the missing-vs-zero contract test the SDK doc and specs/edge-node.md rest on. The backend viewEdgeNode assigns the three live pointers inside its `ReceivedAt > 0` branch unconditionally, so an idle but online+heartbeating node emits e.g. `gpu_util_pct: 0` — the JSON key is PRESENT with value 0, NOT omitted. The SDK must surface `*GPUUtilPct == 0` (non-nil pointer to zero), distinct from the offline case where the key is omitted entirely (nil pointer). Without this, a CLI / dashboard rendering "GPU 0%" for a busy node and "no live data" for an idle one would collapse into the same nil branch and the seller would lose the distinction.
 func TestEdgeNodeTelemetryZeroValuesOnIdleNode(t *testing.T) {
 	const nodeJSON = `{
 		"id":              4,
@@ -320,11 +279,7 @@ func TestEdgeNodeTelemetryZeroValuesOnIdleNode(t *testing.T) {
 	}
 }
 
-// TestEdgeNodeTelemetryNilOnOfflineNode pins the offline rendering
-// path: when the backend omits the telemetry fields (omitempty,
-// matches the "node is offline / no heartbeat yet" branch in
-// viewEdgeNode), the SDK pointers must remain nil so CLI / dashboard
-// renderers can distinguish "no live data" from "0% util".
+// TestEdgeNodeTelemetryNilOnOfflineNode pins the offline rendering path: when the backend omits the telemetry fields (omitempty, matches the "node is offline / no heartbeat yet" branch in viewEdgeNode), the SDK pointers must remain nil so CLI / dashboard renderers can distinguish "no live data" from "0% util".
 func TestEdgeNodeTelemetryNilOnOfflineNode(t *testing.T) {
 	const nodeJSON = `{
 		"id":           2,
@@ -407,9 +362,7 @@ func TestGetEdgeNodeFiltersList(t *testing.T) {
 }
 
 func TestSetEdgeNodeStatus(t *testing.T) {
-	// Cover both action values — a typo like
-	// `EdgeNodeActionEnable = "enabled"` (the buggy SDK shape we
-	// fixed) would slip past a single-value test.
+	// Cover both action values — a typo like `EdgeNodeActionEnable = "enabled"` (the buggy SDK shape we fixed) would slip past a single-value test.
 	cases := []struct {
 		name       string
 		action     EdgeNodeAction
@@ -426,12 +379,7 @@ func TestSetEdgeNodeStatus(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				gotMethod = r.Method
 				gotPath = r.URL.Path
-				// Decode against the BACKEND-side shape
-				// (action: enable|disable), not the SDK's own struct
-				// — a regression that reintroduces the old
-				// {"status":"paused"} payload would round-trip
-				// cleanly through the SDK's own struct and slip past
-				// the test.
+				// Decode against the BACKEND-side shape (action: enable|disable), not the SDK's own struct — a regression that reintroduces the old {"status":"paused"} payload would round-trip cleanly through the SDK's own struct and slip past the test.
 				var body struct {
 					Action string `json:"action"`
 				}
@@ -468,12 +416,7 @@ func TestDeleteEdgeNode(t *testing.T) {
 }
 
 func TestUpdateEdgeNode(t *testing.T) {
-	// Decode against the BACKEND-side wire format (the controller's
-	// edgeNodeUpdateRequest{Name, Location} in
-	// backend/internal/transport/http/edge/node.go) — decoding into the
-	// SDK's own EdgeNodeUpdate would round-trip cleanly even if a
-	// future SDK rename desynchronised the JSON tags, masking the
-	// drift this test is meant to catch.
+	// Decode against the BACKEND-side wire format (the controller's edgeNodeUpdateRequest{Name, Location} in backend/internal/transport/http/edge/node.go) — decoding into the SDK's own EdgeNodeUpdate would round-trip cleanly even if a future SDK rename desynchronised the JSON tags, masking the drift this test is meant to catch.
 	var gotMethod, gotPath, gotName string
 	var gotLocCountry, gotLocRegion string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -38,9 +38,7 @@ func TestGetSellerEligibility(t *testing.T) {
 		}
 	})
 
-	// `success:false` at 200 must surface the message — the dashboard
-	// fronts this same endpoint and renders that message inline, the
-	// CLI mirrors that behaviour.
+	// `success:false` at 200 must surface the message — the dashboard fronts this same endpoint and renders that message inline, the CLI mirrors that behaviour.
 	t.Run("success:false bubbles up", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
@@ -63,13 +61,7 @@ func TestCreateSellerChannel(t *testing.T) {
 			if got := r.Header.Get("Content-Type"); got != "application/json" {
 				t.Errorf("Content-Type = %q, want application/json", got)
 			}
-			// Body shape: backend reads name/kind_slug/keys/models —
-			// assert the CLI didn't drop one of those fields, AND that
-			// `keys` is the new array form (a regression to the old
-			// single `key` field would break the backend's per-key
-			// state invariants from #186). kind_slug (not the retired
-			// integer `type`) is what the backend now binds — sending
-			// `type` makes the backend drop it and 422.
+			// Body shape: backend reads name/kind_slug/keys/models — assert the CLI didn't drop one of those fields, AND that `keys` is the new array form (a regression to the old single `key` field would break the backend's per-key state invariants from #186). kind_slug (not the retired integer `type`) is what the backend now binds — sending `type` makes the backend drop it and 422.
 			var body map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatalf("decode body: %v", err)
@@ -107,9 +99,7 @@ func TestCreateSellerChannel(t *testing.T) {
 		}
 	})
 
-	// The eligibility 403 surfaces the gate message — `everyapi seller
-	// add-key` re-renders that string verbatim, so any masking here
-	// would erase the actionable hint.
+	// The eligibility 403 surfaces the gate message — `everyapi seller add-key` re-renders that string verbatim, so any masking here would erase the actionable hint.
 	t.Run("403 surfaces server message", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
@@ -125,10 +115,7 @@ func TestCreateSellerChannel(t *testing.T) {
 		}
 	})
 
-	// Multi-key body: keys[] + key_remarks[] must serialize index-aligned.
-	// The backend pairs them by position to carry per-key state, so a
-	// silent reorder during JSON marshal would attribute a remark to
-	// the wrong credential.
+	// Multi-key body: keys[] + key_remarks[] must serialize index-aligned. The backend pairs them by position to carry per-key state, so a silent reorder during JSON marshal would attribute a remark to the wrong credential.
 	t.Run("multi-key keys and remarks are index-aligned on the wire", func(t *testing.T) {
 		var captured struct {
 			Keys       []string `json:"keys"`

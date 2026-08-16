@@ -54,10 +54,7 @@ func TestInstallKeyFileIsSafe_GroupReadableIsUnsafe(t *testing.T) {
 	}
 }
 
-// TestLoadOrCreateInstallKey_UnsafeFileNotTrusted proves the end-to-end
-// wiring: loadOrCreateInstallKey must not read through an unsafe (symlinked)
-// key file — it should mint a fresh key instead of trusting the symlink
-// target's contents.
+// TestLoadOrCreateInstallKey_UnsafeFileNotTrusted proves the end-to-end wiring: loadOrCreateInstallKey must not read through an unsafe (symlinked) key file — it should mint a fresh key instead of trusting the symlink target's contents.
 func TestLoadOrCreateInstallKey_UnsafeFileNotTrusted(t *testing.T) {
 	xdgHome := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", xdgHome)

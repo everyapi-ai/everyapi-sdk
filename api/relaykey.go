@@ -37,19 +37,33 @@ func (e *ErrCacheSave) Error() string {
 func (e *ErrCacheSave) Unwrap() error { return e.Err }
 
 // ResolveRelayKey is the shared resolver. See package doc for the precedence rules. Mutates *creds.RelayKey only on the default- group success path. Persists via config.Save in that same path; a Save failure returns the resolved key paired with *ErrCacheSave so the caller can decide whether to abort or warn-and-proceed.
-func ResolveRelayKey(ctx context.Context, creds *config.Credentials, group string) (string, error) {
+func ResolveRelayKey(ctx context.Context, creds *config.Credentials, group string) (key string, err error) {
 	if creds == nil {
 		return "", errors.New("not signed in")
 	}
+	// Set only on the one-shot re-resolution of a pre-tiering cache (see below). It makes that re-resolution strictly optional: the deferred handler swaps any hard failure back to the cached key, so an offline launch, an unreachable gateway or a revoked management token degrades to exactly the behaviour that shipped before the tiering rather than turning a working install into an error. ErrCacheSave is left alone — it arrives WITH a usable key.
+	var unstampedCache string
+	defer func() {
+		if err != nil && key == "" && unstampedCache != "" {
+			key, err = unstampedCache, nil
+		}
+	}()
 	if group == "" && creds.RelayKey != "" {
 		if key, ok, saveErr := refreshRelayKeyIfNeeded(ctx, creds); ok {
+			// An OAuth2-issued key is minted for this login, not chosen from the account's token list, so the tiering below never applied to it and there is nothing to re-check.
 			if saveErr != nil {
 				// Key rotated but couldn't be persisted — return the fresh key paired with *ErrCacheSave so the caller completes the action and can warn instead of silently losing the rotated key.
 				return key, &ErrCacheSave{Err: saveErr}
 			}
 			return key, nil
 		}
-		return creds.RelayKey, nil
+		// A cache written before the system-managed tiering existed may hold exactly the key that tiering demotes — see Credentials.RelayKeySystemChecked. Falling through re-resolves once and stamps the flag; every launch after that is a cache hit again.
+		//
+		// OAuth logins are exempt whatever the flag says: their key is minted for the login rather than chosen from the account's token list, so the tiering never applied to it. refreshRelayKeyIfNeeded returns ok=false both when no refresh is due and when one failed, so the OAuth check has to be made here rather than inferred from that call.
+		if creds.RelayKeySystemChecked || creds.OAuthClientID != "" {
+			return creds.RelayKey, nil
+		}
+		unstampedCache = creds.RelayKey
 	}
 
 	// Region-aware: relay-key lookup is a command dial path, so it honors settings.gateway_region (via ForCredentials) rather than the raw login base. Otherwise `use --group` / `status` for a user who switched region without re-login would hit the unreachable login gateway here — before the region-resolved probe/relay calls downstream ever run.
@@ -59,7 +73,17 @@ func ResolveRelayKey(ctx context.Context, creds *config.Credentials, group strin
 		return "", fmt.Errorf("look up relay API key: %w", err)
 	}
 	// Default group: prefer the auto-group token. It is the only key that routes across every group the account can reach, so it is what a launch with no explicit --group should ride. Taking the list head instead handed the default to whatever token was created last — a key scoped to one group, whose /v1/models is a subset of the account's models, silently narrowing every client launched after it. Any other enabled token remains the fallback for accounts without an auto key; the resolver never creates one on this path. The default arm scans the whole list rather than stopping at the auto token: knowing whether ANY other enabled key exists is what makes the grant check below decidable, and an early break left that unknown.
+	//
+	// System-managed keys are held back in a third tier. They belong to an EveryAPI client rather than the user and are deliberately model-limited, so treating one as a normal candidate collapses every launched client's catalogue to that key's subset — the failure that motivated this tier: an account holding both its own auto key and the Connect app's shared diagnostics key (also auto-group) had launches routed through the diagnostics key, cutting a 23-model catalogue to 3 and 403-ing on the model Claude Code boots with. They stay eligible as a LAST resort: an account whose only enabled key is a system one must keep working, and "fewer models" beats ErrNoRelayKey.
 	var pick, autoPick, fallback *TokenSummary
+	// Held by value, not pointer: this one is consulted AFTER the auto-create branch below reassigns `tokens`, which would strand a pointer on the old backing array.
+	var systemFallback TokenSummary
+	haveSystemFallback := false
+	rememberSystem := func(t TokenSummary) {
+		if !haveSystemFallback {
+			systemFallback, haveSystemFallback = t, true
+		}
+	}
 	for i := range tokens {
 		if tokens[i].Status != TokenStatusEnabled {
 			continue
@@ -68,8 +92,16 @@ func ResolveRelayKey(ctx context.Context, creds *config.Credentials, group strin
 			if tokens[i].Group != group {
 				continue
 			}
+			if tokens[i].SystemManaged {
+				rememberSystem(tokens[i])
+				continue
+			}
 			pick = &tokens[i]
 			break
+		}
+		if tokens[i].SystemManaged {
+			rememberSystem(tokens[i])
+			continue
 		}
 		if tokens[i].Group == GroupAuto {
 			if autoPick == nil {
@@ -83,37 +115,52 @@ func ResolveRelayKey(ctx context.Context, creds *config.Credentials, group strin
 	}
 	if group == "" {
 		pick = autoPick
+		// Where to go when the auto key turns out to be unusable: an ordinary key first, the EveryAPI-owned one only when the account has nothing else. Demoting system keys must not disable this downgrade — an account whose sole other enabled key is system-managed would otherwise keep a known-dead auto key and die on a zero-model catalogue, where before this tier existed it fell back and kept working. Safe to hold as a pointer into systemFallback: this arm only runs for group == "", which never reaches the auto-create branch that reassigns `tokens`.
+		downgrade := fallback
+		if downgrade == nil && haveSystemFallback {
+			downgrade = &systemFallback
+		}
 		switch {
 		case pick == nil:
-			pick = fallback
-		case fallback != nil:
+			pick = downgrade
+		case downgrade != nil:
 			// Prefer the auto key only while the account may still USE that group. A tier that loses the grant keeps its enabled auto token, and TokenAuth exempts "auto" from the group gate — so the key authenticates, then expands to an empty pool list and every launch dies on a zero-model catalogue. Costs one request, and only when there is another key worth falling back to. An unanswerable probe keeps the auto key: this check exists to dodge a known-bad pick, not to invent a downgrade.
 			if usable, probeErr := client.autoGroupUsable(ctx); probeErr == nil && !usable {
-				pick = fallback
+				pick = downgrade
 			}
 		}
 	}
-	// autoPick/fallback are only assigned on the group == "" arm above, and are deliberately not consulted past this point: the auto-create branch below reassigns `tokens`, which would leave either pointer aimed at a stale backing array.
+	// autoPick/fallback are only assigned on the group == "" arm above, and are deliberately not consulted past this point: the auto-create branch below reassigns `tokens`, which would leave either pointer aimed at a stale backing array. systemFallback is exempt because it was copied by value for exactly this reason.
 	if pick == nil && group == GroupAuto {
-		if err := client.CreateToken(ctx, TokenCreate{
+		createErr := client.CreateToken(ctx, TokenCreate{
 			Name:            "Auto",
 			ExpiredTime:     TokenExpiresNever,
 			UnlimitedQuota:  true,
 			Group:           GroupAuto,
 			CrossGroupRetry: true,
-		}); err != nil {
-			return "", fmt.Errorf("create auto relay API key: %w", err)
-		}
-		tokens, err = client.ListEnabledTokens(ctx)
-		if err != nil {
-			return "", fmt.Errorf("look up created auto relay API key: %w", err)
-		}
-		for i := range tokens {
-			if tokens[i].Status == TokenStatusEnabled && tokens[i].Group == GroupAuto {
-				pick = &tokens[i]
-				break
+		})
+		if createErr != nil {
+			createErr = fmt.Errorf("create auto relay API key: %w", createErr)
+		} else if refreshed, listErr := client.ListEnabledTokens(ctx); listErr != nil {
+			createErr = fmt.Errorf("look up created auto relay API key: %w", listErr)
+		} else {
+			tokens = refreshed
+			for i := range tokens {
+				// Skip system keys here too: the account may already hold an EveryAPI-owned auto key, and matching it would hand back the narrow key we just created a replacement for.
+				if tokens[i].Status == TokenStatusEnabled && tokens[i].Group == GroupAuto && !tokens[i].SystemManaged {
+					pick = &tokens[i]
+					break
+				}
 			}
 		}
+		// Only fatal when there is nothing to fall back to. An account holding an EveryAPI-owned auto key used to launch fine on it; now that such a key no longer satisfies the search, a failed create (token ceiling reached, network blip) would turn a working setup into a hard error. Prefer the narrower key — that is exactly the behaviour that shipped before this field existed.
+		if pick == nil && createErr != nil && !haveSystemFallback {
+			return "", createErr
+		}
+	}
+	// Last resort, deliberately after the auto-create attempt: an account whose only enabled key is EveryAPI-owned is better served by a fresh key of its own than by the client-shared one. If no such key could be made, fall back rather than fail — that key's narrower model set still beats refusing to launch, and this is exactly the shape a user who only ever installed a client, never running the CLI, arrives in.
+	if pick == nil && haveSystemFallback {
+		pick = &systemFallback
 	}
 	if pick == nil {
 		if group != "" {
@@ -121,7 +168,7 @@ func ResolveRelayKey(ctx context.Context, creds *config.Credentials, group strin
 		}
 		return "", ErrNoRelayKey
 	}
-	key, err := client.TokenKey(ctx, pick.ID)
+	key, err = client.TokenKey(ctx, pick.ID)
 	if err != nil {
 		return "", fmt.Errorf("fetch relay API key %q: %w", pick.Name, err)
 	}
@@ -133,6 +180,8 @@ func ResolveRelayKey(ctx context.Context, creds *config.Credentials, group strin
 
 	creds.RelayKey = key
 	creds.RelayKeyTokenID = pick.ID
+	// This key came out of the tiering above, so the cache no longer needs re-resolving on the next launch.
+	creds.RelayKeySystemChecked = true
 	if saveErr := config.Save(creds); saveErr != nil {
 		return key, &ErrCacheSave{Err: saveErr}
 	}
@@ -193,6 +242,8 @@ func SelectRelayKey(ctx context.Context, creds *config.Credentials, tokenID int)
 	}
 	creds.RelayKey = key
 	creds.RelayKeyTokenID = tokenID
+	// An explicit choice needs no re-resolution: the user named this key, and re-running the tiering on the next launch would only discard what they picked.
+	creds.RelayKeySystemChecked = true
 	// A manual account-token selection leaves OAuth key rotation mode. Keeping old refresh material would silently replace the chosen key later.
 	creds.RefreshToken = ""
 	creds.RelayKeyExpiresAt = 0
@@ -211,8 +262,10 @@ func SelectAutoRelayKey(ctx context.Context, creds *config.Credentials) (bool, e
 		return false, fmt.Errorf("look up auto relay API key: %w", err)
 	}
 	// Status is re-checked here even though ListEnabledTokens asks the gateway to filter: that filter is a query parameter an older gateway may ignore (see the pagination note on listTokens), and selecting a DISABLED auto token would persist a key that 401s on the very next launch. Matches the check ResolveRelayKey applies to the same list.
+	//
+	// System-managed keys are skipped for the same reason ResolveRelayKey demotes them, and it matters MORE here: this path PERSISTS its choice into creds.RelayKey, and the default-group arm of ResolveRelayKey returns that cache before it ever lists tokens. Matching an EveryAPI-owned auto key here would pin the account to that key's narrow model set on every subsequent launch, out of reach of the resolver's own tiering. The create below then gives the account an auto key of its own, which is exactly what it lacks.
 	for _, token := range tokens {
-		if token.Status == TokenStatusEnabled && token.Group == GroupAuto {
+		if token.Status == TokenStatusEnabled && token.Group == GroupAuto && !token.SystemManaged {
 			return false, SelectRelayKey(ctx, creds, token.ID)
 		}
 	}
@@ -230,7 +283,7 @@ func SelectAutoRelayKey(ctx context.Context, creds *config.Credentials) (bool, e
 		return true, fmt.Errorf("look up created auto relay API key: %w", err)
 	}
 	for _, token := range tokens {
-		if token.Status == TokenStatusEnabled && token.Group == GroupAuto {
+		if token.Status == TokenStatusEnabled && token.Group == GroupAuto && !token.SystemManaged {
 			return true, SelectRelayKey(ctx, creds, token.ID)
 		}
 	}

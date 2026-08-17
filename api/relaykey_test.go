@@ -70,10 +70,11 @@ func TestResolveRelayKey_CacheHit(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	// Unreachable API on purpose — cache hit must NOT phone home.
 	creds := &config.Credentials{
-		APIBase:     "http://127.0.0.1:1",
-		AccessToken: "tok",
-		UserID:      1,
-		RelayKey:    "sk-everyapi-cached-xxx",
+		APIBase:               "http://127.0.0.1:1",
+		AccessToken:           "tok",
+		UserID:                1,
+		RelayKey:              "sk-everyapi-cached-xxx",
+		RelayKeySystemChecked: true,
 	}
 	got, err := ResolveRelayKey(context.Background(), creds, "")
 	if err != nil {
@@ -81,6 +82,67 @@ func TestResolveRelayKey_CacheHit(t *testing.T) {
 	}
 	if got != "sk-everyapi-cached-xxx" {
 		t.Errorf("key = %q, want cached", got)
+	}
+}
+
+// A cache written before the system-managed tiering shipped may hold exactly the key the tiering demotes, and the default-group path never lists tokens — so without one forced re-resolution every already-affected user would upgrade and see no change. This is the test for that: an unstamped cache is re-resolved once, the better key replaces it, and the stamp is written so the next launch is a cache hit again.
+func TestResolveRelayKey_UnstampedCacheIsReresolvedOnce(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	srv := tokenListAndKeyServer(t,
+		[]map[string]interface{}{
+			{"id": 2368, "name": "EveryAPI Connect AI Diagnostics", "status": TokenStatusEnabled, "group": "auto", "system_managed": true},
+			{"id": 478, "name": "Auto", "status": TokenStatusEnabled, "group": "auto"},
+		},
+		map[int]string{2368: "sk-everyapi-system-2368", 478: "sk-everyapi-auto-478"},
+	)
+	creds := &config.Credentials{
+		APIBase:     srv.URL,
+		AccessToken: "tok",
+		UserID:      1,
+		// What an affected install actually holds: the system key, cached by the older rule.
+		RelayKey:        "sk-everyapi-system-2368",
+		RelayKeyTokenID: 2368,
+	}
+
+	got, err := ResolveRelayKey(context.Background(), creds, "")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got != "sk-everyapi-auto-478" {
+		t.Errorf("key = %q, want the stale system key replaced by the user's own", got)
+	}
+	if !creds.RelayKeySystemChecked {
+		t.Error("re-resolution did not stamp the cache, so it would repeat on every launch")
+	}
+
+	// Second call must be a pure cache hit. Point the base at a dead port: any network call now is a bug.
+	creds.APIBase = "http://127.0.0.1:1"
+	again, err := ResolveRelayKey(context.Background(), creds, "")
+	if err != nil {
+		t.Fatalf("second resolve: %v", err)
+	}
+	if again != "sk-everyapi-auto-478" {
+		t.Errorf("second resolve = %q, want the stamped cache returned without a call", again)
+	}
+}
+
+// OAuth logins are exempt from the re-resolution: their key is minted for the login, never chosen from the token list, so there is nothing for the tiering to have gotten wrong.
+func TestResolveRelayKey_OAuthCacheIsNotReresolved(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	creds := &config.Credentials{
+		// Unreachable on purpose: an OAuth cache must not phone home even without the stamp.
+		APIBase:       "http://127.0.0.1:1",
+		AccessToken:   "tok",
+		UserID:        1,
+		RelayKey:      "sk-everyapi-oauth-cached",
+		OAuthClientID: "cli",
+	}
+	got, err := ResolveRelayKey(context.Background(), creds, "")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got != "sk-everyapi-oauth-cached" {
+		t.Errorf("key = %q, want the OAuth cache returned untouched", got)
 	}
 }
 
@@ -741,5 +803,168 @@ func TestResolveRelayKey_OAuth2_RefreshFails_FallsBackToCached(t *testing.T) {
 	// A failed refresh must not clobber the cached creds.
 	if creds.RelayKey != "sk-everyapi-cached" || creds.RefreshToken != "rt-bad" {
 		t.Errorf("creds mutated on failed refresh: relay=%q refresh=%q", creds.RelayKey, creds.RefreshToken)
+	}
+}
+
+// The failure this tier exists for: an account holding both its own auto key and an EveryAPI-owned one — the Connect app's shared diagnostics key is also auto-group. That key is deliberately model-limited, so picking it collapses every launched client's catalogue to its subset. The system key is listed first, the way a newer id arrives from the API, so a resolver that took the first auto match would fail this.
+func TestResolveRelayKey_DefaultGroupSkipsSystemManagedToken(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	srv := tokenListAndKeyServer(t,
+		[]map[string]interface{}{
+			{"id": 2368, "name": "EveryAPI Connect AI Diagnostics", "status": TokenStatusEnabled, "group": "auto", "system_managed": true},
+			{"id": 478, "name": "Auto", "status": TokenStatusEnabled, "group": "auto"},
+		},
+		map[int]string{2368: "sk-everyapi-system-2368", 478: "sk-everyapi-auto-478"},
+	)
+	creds := &config.Credentials{APIBase: srv.URL, AccessToken: "tok", UserID: 1}
+	got, err := ResolveRelayKey(context.Background(), creds, "")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got != "sk-everyapi-auto-478" {
+		t.Errorf("key = %q, want the user's own auto key", got)
+	}
+	if creds.RelayKeyTokenID != 478 {
+		t.Errorf("creds.RelayKeyTokenID = %d, want 478", creds.RelayKeyTokenID)
+	}
+}
+
+// Demotion must not become exclusion. A user who only ever installed a client, never running the CLI, holds nothing but the system key; ErrNoRelayKey would be a worse outcome than a narrower catalogue.
+func TestResolveRelayKey_FallsBackToSystemManagedWhenItIsTheOnlyKey(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	srv := tokenListAndKeyServer(t,
+		[]map[string]interface{}{
+			{"id": 2368, "name": "EveryAPI Connect AI Diagnostics", "status": TokenStatusEnabled, "group": "auto", "system_managed": true},
+		},
+		map[int]string{2368: "sk-everyapi-system-2368"},
+	)
+	creds := &config.Credentials{APIBase: srv.URL, AccessToken: "tok", UserID: 1}
+	got, err := ResolveRelayKey(context.Background(), creds, "")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got != "sk-everyapi-system-2368" {
+		t.Errorf("key = %q, want the system key as a last resort", got)
+	}
+}
+
+// An explicit --group is the user naming what they want, so a system key in that group stays reachable — but only once no ordinary key in the group qualifies.
+func TestResolveRelayKey_ExplicitGroupPrefersNonSystemThenFallsBack(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	t.Run("ordinary key in the group wins", func(t *testing.T) {
+		srv := tokenListAndKeyServer(t,
+			[]map[string]interface{}{
+				{"id": 91, "name": "system", "status": TokenStatusEnabled, "group": "grp_basic", "system_managed": true},
+				{"id": 90, "name": "mine", "status": TokenStatusEnabled, "group": "grp_basic"},
+			},
+			map[int]string{90: "sk-everyapi-mine-90", 91: "sk-everyapi-system-91"},
+		)
+		creds := &config.Credentials{APIBase: srv.URL, AccessToken: "tok", UserID: 1}
+		got, err := ResolveRelayKey(context.Background(), creds, "grp_basic")
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+		if got != "sk-everyapi-mine-90" {
+			t.Errorf("key = %q, want the ordinary key in the group", got)
+		}
+	})
+
+	t.Run("system key is still reachable when it is the only match", func(t *testing.T) {
+		srv := tokenListAndKeyServer(t,
+			[]map[string]interface{}{
+				{"id": 91, "name": "system", "status": TokenStatusEnabled, "group": "grp_basic", "system_managed": true},
+			},
+			map[int]string{91: "sk-everyapi-system-91"},
+		)
+		creds := &config.Credentials{APIBase: srv.URL, AccessToken: "tok", UserID: 1}
+		got, err := ResolveRelayKey(context.Background(), creds, "grp_basic")
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+		if got != "sk-everyapi-system-91" {
+			t.Errorf("key = %q, want the system key when nothing else matches the group", got)
+		}
+	})
+}
+
+// Demoting system keys means `--group auto` no longer finds one and now attempts a create. If that create fails — token ceiling reached, network blip — an account that used to launch fine on its EveryAPI-owned auto key must not be turned into a hard error.
+func TestResolveRelayKey_AutoGroupFallsBackToSystemKeyWhenCreateFails(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/token/":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"data": map[string]interface{}{"items": []map[string]interface{}{
+					{"id": 2368, "name": "EveryAPI Connect AI Diagnostics", "status": TokenStatusEnabled, "group": "auto", "system_managed": true},
+				}},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/token/":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false, "message": "maximum number of tokens reached",
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/token/2368/key":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "data": map[string]interface{}{"key": "sk-everyapi-system-2368"},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	creds := &config.Credentials{APIBase: srv.URL, AccessToken: "tok", UserID: 1}
+	got, err := ResolveRelayKey(context.Background(), creds, "auto")
+	if err != nil {
+		t.Fatalf("a failed auto-create with a system key available must not be fatal: %v", err)
+	}
+	if got != "sk-everyapi-system-2368" {
+		t.Errorf("key = %q, want the system key as the fallback", got)
+	}
+}
+
+// The same failure with nothing to fall back to still has to surface — the fallback must not swallow a genuine error.
+func TestResolveRelayKey_AutoGroupCreateFailureStaysFatalWithoutFallback(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/token/":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"data":    map[string]interface{}{"items": []map[string]interface{}{}},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/token/":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false, "message": "maximum number of tokens reached",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	creds := &config.Credentials{APIBase: srv.URL, AccessToken: "tok", UserID: 1}
+	if _, err := ResolveRelayKey(context.Background(), creds, "auto"); err == nil {
+		t.Fatal("a failed auto-create with no fallback must surface as an error")
+	}
+}
+
+// A gateway predating the column omits system_managed entirely; it must decode as false so selection behaves exactly as it did before the field existed.
+func TestResolveRelayKey_AbsentSystemManagedFieldDecodesFalse(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	srv := tokenListAndKeyServer(t,
+		[]map[string]interface{}{
+			{"id": 40, "name": "Auto", "status": TokenStatusEnabled, "group": "auto"},
+		},
+		map[int]string{40: "sk-everyapi-auto-40"},
+	)
+	creds := &config.Credentials{APIBase: srv.URL, AccessToken: "tok", UserID: 1}
+	got, err := ResolveRelayKey(context.Background(), creds, "")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got != "sk-everyapi-auto-40" {
+		t.Errorf("key = %q, want the auto key on a gateway without the field", got)
 	}
 }

@@ -80,6 +80,12 @@ type Credentials struct {
 	RelayKey string `json:"relay_key,omitempty"`
 	// RelayKeyTokenID identifies the account token cached in RelayKey. It lets interactive clients restore and mark the current selection without disclosing every candidate key. Zero means unknown (legacy/OAuth creds).
 	RelayKeyTokenID int `json:"relay_key_token_id,omitempty"`
+	// RelayKeySystemChecked records that the cached RelayKey was chosen under the system-managed tiering in api.ResolveRelayKey, rather than by the older rule that treated every enabled key alike.
+	//
+	// Without it the tiering would never reach the users it was written for. The default-group path returns creds.RelayKey without listing tokens, so anyone who had already run `everyapi use` keeps whatever that older rule picked — for the accounts this feature exists to fix, that is exactly the EveryAPI-owned key whose narrow model set caused the problem. They would upgrade and see no change.
+	//
+	// False on every credentials file written before this field, which forces one re-resolution on the next launch; the field is set on the write-back below and the cache is honoured normally from then on. The cost is a single extra token-list call, once per install.
+	RelayKeySystemChecked bool `json:"relay_key_system_checked,omitempty"`
 	// RefreshToken renews an OAuth2-issued RelayKey before it expires (device-grant fallback only). Empty for the legacy flow, whose keys don't expire.
 	RefreshToken string `json:"refresh_token,omitempty"`
 	// RelayKeyExpiresAt is the RelayKey's expiry (unix seconds; 0 = unknown / non-expiring). Drives proactive refresh.

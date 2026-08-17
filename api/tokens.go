@@ -24,6 +24,8 @@ type TokenSummary struct {
 	Status int    `json:"status"`
 	// Group is the token's routing group. /api/token/ returns it on every row (controller buildMaskedTokenResponse → model.Token, which carries `json:"group"`). `everyapi use --group` filters on it so a buyer can deliberately route to the channels bound to a given group (e.g. a BytePlus-only group) instead of the newest enabled key.
 	Group string `json:"group"`
+	// SystemManaged marks a key minted for an EveryAPI client rather than by the user. Such keys are deliberately model-limited, so ResolveRelayKey demotes them to a last resort — see the systemFallback arm there. Absent on gateways older than the field, where it decodes as false and selection behaves exactly as before.
+	SystemManaged bool `json:"system_managed"`
 }
 
 // ListTokens returns all of the user's relay API tokens (management API, UserAuth — caller must have set WithUserID). It follows pagination because disabled historical tokens can fill earlier pages while an older enabled key remains selectable on a later page.

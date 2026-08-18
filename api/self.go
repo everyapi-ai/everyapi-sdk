@@ -16,6 +16,9 @@ type SelfData struct {
 	RequestCount int64  `json:"request_count"`
 	// SellerQuota — pending channel-marketplace earnings. The everyapi_seller_withdraw MCP tool reads this to decide the default "all" transfer amount. Zero when the user has never participated in the marketplace.
 	SellerQuota int `json:"seller_quota"`
+	// AffCount / AffQuota — how many invitees this account has credited, and the referral reward still sitting in the affiliate balance (raw quota units; divide by StatusData.QuotaPerUnit for USD). The desktop invite card reads both. AffCode is deliberately absent: /api/user/aff lazy-generates it, so GetAffCode is the only source that can be trusted to return a non-empty code.
+	AffCount int `json:"aff_count"`
+	AffQuota int `json:"aff_quota"`
 	// Role mirrors the backend's RoleX enum (0=guest, 1=common, 10=admin, 100=root). The cli persists this into credentials.json so help-text rendering can hide admin-gated subcommands without a per-help-render network round-trip.
 	Role int `json:"role"`
 	// Setting is the raw user-setting JSON blob (notify channel + quota-warning threshold + UI prefs). Left as a string to keep SelfData decoupled from the full setting schema; GetNotifySetting parses out the notification subset on demand.
@@ -41,6 +44,9 @@ func (c *Client) GetSelf(ctx context.Context) (*SelfData, error) {
 // StatusData is the subset of /api/status the CLI reads. We use quota_per_unit to convert the integer quota field into a USD figure for display. The /api/status endpoint is unauthenticated so this works before login too.
 type StatusData struct {
 	QuotaPerUnit float64 `json:"quota_per_unit"`
+	// QuotaForInviter / QuotaForInvitee — what each side earns per accepted invite, in raw quota units. Both are 0 when the operator has referral rewards switched off, which is the signal to say nothing about rewards rather than to print "$0.00".
+	QuotaForInviter float64 `json:"quota_for_inviter"`
+	QuotaForInvitee float64 `json:"quota_for_invitee"`
 }
 
 func (c *Client) GetStatus(ctx context.Context) (*StatusData, error) {

@@ -171,13 +171,14 @@ func TestDelete_Idempotent(t *testing.T) {
 	}
 }
 
-func TestSettingsSafetyPreferencesPersistExplicitTrueAndFalse(t *testing.T) {
+func TestSettingsLaunchPreferencesPersist(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	enabled := true
 	disabled := false
 	want := &Settings{
 		CodexHookTrustBypass: &enabled,
 		DangerousMode:        &disabled,
+		TerminalMode:         "tmux",
 	}
 	if err := SaveSettings(want); err != nil {
 		t.Fatalf("SaveSettings: %v", err)
@@ -191,6 +192,9 @@ func TestSettingsSafetyPreferencesPersistExplicitTrueAndFalse(t *testing.T) {
 	}
 	if got.DangerousMode == nil || *got.DangerousMode {
 		t.Fatalf("DangerousMode = %v, want explicit false", got.DangerousMode)
+	}
+	if got.TerminalMode != "tmux" {
+		t.Fatalf("TerminalMode = %q, want tmux", got.TerminalMode)
 	}
 }
 

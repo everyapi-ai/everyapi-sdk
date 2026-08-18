@@ -8,6 +8,11 @@ import (
 	"path/filepath"
 )
 
+const (
+	TerminalModeNative = "native"
+	TerminalModeTmux   = "tmux"
+)
+
 // Settings is the on-disk user-preference payload, stored beside credentials.json (same ConfigDir). Independent file because preferences should survive `everyapi logout` — the credentials file is rewritten / deleted on login flows but settings outlive that.
 //
 // Mode 0644 (not 0600 like credentials) because nothing in here is a secret — having it world-readable just means another user on the same machine can see that you prefer Chinese. The file is per-user already via ConfigDir, so 0644 is plenty.
@@ -26,6 +31,9 @@ type Settings struct {
 
 	// DangerousMode controls the target tool's "skip all confirmations" mode. Nil means the user has not chosen yet.
 	DangerousMode *bool `json:"dangerous_mode,omitempty"`
+
+	// TerminalMode controls how an interactive `everyapi use` launch owns its terminal. "native" keeps the current terminal; "tmux" restarts the complete launch inside a persistent tmux session. Empty means the user has not chosen yet.
+	TerminalMode string `json:"terminal_mode,omitempty"`
 
 	// ToolModels remembers the model each tool was last launched with, keyed by tool name ("claude", "codex", …). Absent or missing entry means the user has not chosen for that tool yet, which is what makes the first launch prompt and later ones not.
 	//

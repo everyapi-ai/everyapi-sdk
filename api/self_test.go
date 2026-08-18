@@ -146,7 +146,7 @@ func TestRelayModelCatalog(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"success":true,"object":"list","data":[` +
-			`{"id":"glm-5.1","owned_by":"zhipu_4v","supported_endpoint_types":["anthropic","openai"],"chat_completions_bridge":true,"context_window":131072,"max_output":16384},` +
+			`{"id":"glm-5.1","owned_by":"zhipu_4v","supported_endpoint_types":["anthropic","openai"],"chat_completions_bridge":true,"context_window":131072,"max_output":16384,"supports_thinking":true},` +
 			`{"id":""},` +
 			`{"id":"image-01","owned_by":"minimax","supported_endpoint_types":["image-generation"]}]}`))
 	}))
@@ -175,5 +175,12 @@ func TestRelayModelCatalog(t *testing.T) {
 	}
 	if got[1].ChatCompletionsBridge {
 		t.Error("model[1] chat_completions_bridge = true, want false for omitted field")
+	}
+	// supports_thinking decides whether a launcher offers a reasoning-level control at all, so it has to survive the projection — and an omitted field must read as "unknown" (false), never be invented.
+	if !got[0].SupportsThinking {
+		t.Error("model[0] supports_thinking = false, want true")
+	}
+	if got[1].SupportsThinking {
+		t.Error("model[1] supports_thinking = true, want false for omitted field")
 	}
 }

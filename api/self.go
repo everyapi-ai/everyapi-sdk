@@ -71,6 +71,8 @@ type RelayModel struct {
 	ChatCompletionsBridge  bool
 	ContextWindow          int
 	MaxOutput              int
+	// SupportsThinking reports that the gateway has a verified upstream shape for this model's `reasoning_effort` / `reasoning` request fields. False means unknown, NOT "definitely unsupported" — the gateway's coverage is incremental — so a caller offering a reasoning-level control should show it only where this is true rather than treat the absence as a denial.
+	SupportsThinking bool
 }
 
 // RelayModelCatalog lists the models the RELAY token can actually route to, read from the same GET /v1/models endpoint ProbeRelayToken hits (OpenAI-compatible `{ "data": [ { "id", "owned_by", "supported_endpoint_types" } ] }`). Unlike UserModels (GET /api/user/models, scoped to the management account), this reflects the token's group binding — so a picker built on it only offers models the launched tool will really reach. Build the client with the relay key (no EveryAPI-User-Id), mirroring what a relayed tool sends. Blank ids are filtered so callers needn't dedupe.
@@ -83,6 +85,7 @@ func (c *Client) RelayModelCatalog(ctx context.Context) ([]RelayModel, error) {
 			ChatCompletionsBridge  bool     `json:"chat_completions_bridge"`
 			ContextWindow          int      `json:"context_window"`
 			MaxOutput              int      `json:"max_output"`
+			SupportsThinking       bool     `json:"supports_thinking"`
 		} `json:"data"`
 	}
 	if err := c.do(ctx, "GET", "/v1/models", nil, &env); err != nil {
@@ -98,6 +101,7 @@ func (c *Client) RelayModelCatalog(ctx context.Context) ([]RelayModel, error) {
 				ChatCompletionsBridge:  m.ChatCompletionsBridge,
 				ContextWindow:          m.ContextWindow,
 				MaxOutput:              m.MaxOutput,
+				SupportsThinking:       m.SupportsThinking,
 			})
 		}
 	}

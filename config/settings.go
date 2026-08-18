@@ -39,6 +39,9 @@ type Settings struct {
 	//
 	// Kept here rather than in each client's own config because the clients that need it most cannot hold it themselves: `everyapi use` hands codex a process-scoped CODEX_HOME that is deleted on exit, so anything codex writes about its own model is gone by the next launch. omitempty so a settings file written before this field round-trips unchanged.
 	ToolModels map[string]string `json:"tool_models,omitempty"`
+
+	// ToolReasoningLevels remembers the reasoning/thinking level each tool was last launched with, keyed by tool name. Same reason as ToolModels: the level a user sets inside codex lands in its config.toml, and that file lives in the process-scoped CODEX_HOME `everyapi use` deletes on exit, so the client cannot remember it on its own. Values are the level names the launched tool understands ("low", "medium", "high", "xhigh", "max", "ultra" for codex; pi adds "off"/"minimal"), because the tools do not share one scale — a level is only ever read back by the tool that wrote it.
+	ToolReasoningLevels map[string]string `json:"tool_reasoning_levels,omitempty"`
 }
 
 // ToolModel returns the remembered model for a tool, or "" when the user has not chosen one yet.
@@ -47,6 +50,26 @@ func (s *Settings) ToolModel(tool string) string {
 		return ""
 	}
 	return s.ToolModels[tool]
+}
+
+// ToolReasoningLevel returns the remembered reasoning level for a tool, or "" when the user has not chosen one.
+func (s *Settings) ToolReasoningLevel(tool string) string {
+	if s == nil {
+		return ""
+	}
+	return s.ToolReasoningLevels[tool]
+}
+
+// SetToolReasoningLevel records the reasoning level a tool should boot with. An empty level clears the entry, so a model that no longer offers the remembered level leaves the tool on its own default rather than pinned to a level it will reject.
+func (s *Settings) SetToolReasoningLevel(tool, level string) {
+	if level == "" {
+		delete(s.ToolReasoningLevels, tool)
+		return
+	}
+	if s.ToolReasoningLevels == nil {
+		s.ToolReasoningLevels = make(map[string]string, 1)
+	}
+	s.ToolReasoningLevels[tool] = level
 }
 
 // SetToolModel records the model a tool should boot with. An empty model clears the entry, so a caller that fails to resolve a selection does not pin the tool to a stale one.

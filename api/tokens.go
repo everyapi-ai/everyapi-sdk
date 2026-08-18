@@ -85,7 +85,17 @@ type Token struct {
 	UsedQuota          int     `json:"used_quota"`
 	Group              string  `json:"group"`
 	CrossGroupRetry    bool    `json:"cross_group_retry"`
-	SpecificChannelID  *int    `json:"specific_channel_id"`
+	// AutoGroupExclusions is a JSON array of route-group ids this key refuses to let "auto" route through, e.g. `["grp_a"]`. Empty excludes nothing. Only meaningful when Group is "auto". Carried here so the read-modify-write update path preserves an exclusion the user configured in the dashboard.
+	AutoGroupExclusions string `json:"auto_group_exclusions"`
+	SpecificChannelID   *int   `json:"specific_channel_id"`
+	// The remaining fields exist ONLY so the read-modify-write update path can echo them back. PUT /api/token/ overwrites every column in Token.Update()'s Select list, so a field absent from this struct is sent as its zero value and silently wipes whatever the user configured in the dashboard. Anything added to that Select list must be mirrored here too.
+	Scopes               string `json:"scopes"`
+	SupplierStrategy     string `json:"supplier_strategy"`
+	SupplierSellerIDs    string `json:"supplier_seller_ids"`
+	BudgetEnabled        bool   `json:"budget_enabled"`
+	DailyBudget          int    `json:"daily_budget"`
+	MonthlyBudget        int    `json:"monthly_budget"`
+	BudgetAlertThreshold int    `json:"budget_alert_threshold"`
 }
 
 // TokenCreate is the POST /api/token/ payload. The backend rejects names > 50 chars, negative quotas (when not unlimited), and quotas above 1e9 * QuotaPerUnit — let the server enforce; surface the returned message verbatim instead of duplicating the rules here.
@@ -115,7 +125,17 @@ type TokenUpdate struct {
 	AllowIPs           *string `json:"allow_ips,omitempty"`
 	Group              string  `json:"group"`
 	CrossGroupRetry    bool    `json:"cross_group_retry"`
-	SpecificChannelID  *int    `json:"specific_channel_id,omitempty"`
+	// AutoGroupExclusions must be echoed back from the current row on every update. PUT /api/token/ is a full overwrite, so omitting it clears an exclusion the user configured elsewhere — see the read-modify-write note in the CLI's token update.
+	AutoGroupExclusions string `json:"auto_group_exclusions"`
+	SpecificChannelID   *int   `json:"specific_channel_id,omitempty"`
+	// The remaining fields exist ONLY so the read-modify-write update path can echo them back. PUT /api/token/ overwrites every column in Token.Update()'s Select list, so a field absent from this struct is sent as its zero value and silently wipes whatever the user configured in the dashboard. Anything added to that Select list must be mirrored here too.
+	Scopes               string `json:"scopes"`
+	SupplierStrategy     string `json:"supplier_strategy"`
+	SupplierSellerIDs    string `json:"supplier_seller_ids"`
+	BudgetEnabled        bool   `json:"budget_enabled"`
+	DailyBudget          int    `json:"daily_budget"`
+	MonthlyBudget        int    `json:"monthly_budget"`
+	BudgetAlertThreshold int    `json:"budget_alert_threshold"`
 }
 
 // GetToken fetches a single token by id (masked key). Returns the envelope's data field as a *Token; backend 404s become an error surfaced from the envelope's message.

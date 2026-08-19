@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -142,5 +143,18 @@ func TestAffCodes(t *testing.T) {
 	}
 	if !getCalled || !resetCalled {
 		t.Errorf("missed call: get=%v reset=%v", getCalled, resetCalled)
+	}
+}
+
+func TestGetAffCodePreservesEnvelopeFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"success":false,"message":"access token invalid"}`))
+	}))
+	defer srv.Close()
+
+	_, err := New(srv.URL, "dead").WithUserID(7).GetAffCode(context.Background())
+	var envelopeError *EnvelopeError
+	if !errors.As(err, &envelopeError) {
+		t.Fatalf("GetAffCode error = %T (%v), want *EnvelopeError", err, err)
 	}
 }

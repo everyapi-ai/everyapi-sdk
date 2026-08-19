@@ -197,7 +197,7 @@ func (c *Client) GetAffCode(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if !env.Success {
-		return "", errors.New(env.Message)
+		return "", &EnvelopeError{Message: env.Message}
 	}
 	return env.Data, nil
 }

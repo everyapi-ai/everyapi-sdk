@@ -21,6 +21,23 @@ const (
 	AgentSessionFeedbackNegative AgentSessionFeedback = "negative"
 )
 
+type AgentSessionIdentitySource string
+
+const (
+	AgentSessionIdentitySourceExplicitSession    AgentSessionIdentitySource = "explicit_session"
+	AgentSessionIdentitySourceOpenAIConversation AgentSessionIdentitySource = "openai_conversation"
+	AgentSessionIdentitySourceClaudeSession      AgentSessionIdentitySource = "claude_session"
+	AgentSessionIdentitySourceCodexThread        AgentSessionIdentitySource = "codex_thread"
+	AgentSessionIdentitySourceCodexSession       AgentSessionIdentitySource = "codex_session"
+)
+
+type AgentSessionIdentityConfidence string
+
+const (
+	AgentSessionIdentityConfidenceHigh   AgentSessionIdentityConfidence = "high"
+	AgentSessionIdentityConfidenceMedium AgentSessionIdentityConfidence = "medium"
+)
+
 type AgentSessionBudgetStatus string
 
 const (
@@ -149,15 +166,17 @@ type AgentSessionPolicy struct {
 }
 
 type AgentSessionListFilter struct {
-	Page      int
-	PageSize  int
-	OrgID     int
-	StartedAt int64
-	EndedAt   int64
-	AgentKind string
-	Status    AgentSessionStatus
-	Model     string
-	Feedback  AgentSessionFeedback
+	Page               int
+	PageSize           int
+	OrgID              int
+	StartedAt          int64
+	EndedAt            int64
+	AgentKind          string
+	IdentitySource     AgentSessionIdentitySource
+	IdentityConfidence AgentSessionIdentityConfidence
+	Status             AgentSessionStatus
+	Model              string
+	Feedback           AgentSessionFeedback
 }
 
 func positiveInt(values url.Values, key string, value int) {
@@ -188,6 +207,12 @@ func (filter AgentSessionListFilter) query() string {
 	positiveInt64(values, "ended_at", filter.EndedAt)
 	if filter.AgentKind != "" {
 		values.Set("agent_kind", filter.AgentKind)
+	}
+	if filter.IdentitySource != "" {
+		values.Set("identity_source", string(filter.IdentitySource))
+	}
+	if filter.IdentityConfidence != "" {
+		values.Set("identity_confidence", string(filter.IdentityConfidence))
 	}
 	if filter.Status != "" {
 		values.Set("status", string(filter.Status))

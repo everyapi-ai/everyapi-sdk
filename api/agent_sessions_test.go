@@ -18,16 +18,18 @@ func TestListAgentSessionsCarriesFiltersAndDecodesTimelineSummary(t *testing.T) 
 			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
 		}
 		wantQuery := url.Values{
-			"include_policy": {"true"},
-			"page":           {"2"},
-			"page_size":      {"50"},
-			"org_id":         {"7"},
-			"started_at":     {"100"},
-			"ended_at":       {"200"},
-			"agent_kind":     {"codex"},
-			"status":         {"active"},
-			"model":          {"gpt-5.6-sol"},
-			"feedback":       {"positive"},
+			"include_policy":      {"true"},
+			"page":                {"2"},
+			"page_size":           {"50"},
+			"org_id":              {"7"},
+			"started_at":          {"100"},
+			"ended_at":            {"200"},
+			"agent_kind":          {"codex"},
+			"status":              {"active"},
+			"model":               {"gpt-5.6-sol"},
+			"feedback":            {"positive"},
+			"identity_source":     {"codex_session"},
+			"identity_confidence": {"medium"},
 		}
 		if got := r.URL.Query(); got.Encode() != wantQuery.Encode() {
 			t.Fatalf("query = %q, want %q", got.Encode(), wantQuery.Encode())
@@ -43,6 +45,7 @@ func TestListAgentSessionsCarriesFiltersAndDecodesTimelineSummary(t *testing.T) 
 	got, err := New(server.URL, "acc").WithUserID(9).ListAgentSessions(context.Background(), AgentSessionListFilter{
 		Page: 2, PageSize: 50, OrgID: 7, StartedAt: 100, EndedAt: 200,
 		AgentKind: "codex", Status: AgentSessionStatusActive, Model: "gpt-5.6-sol", Feedback: AgentSessionFeedbackPositive,
+		IdentitySource: AgentSessionIdentitySourceCodexSession, IdentityConfidence: AgentSessionIdentityConfidenceMedium,
 	})
 	if err != nil {
 		t.Fatalf("ListAgentSessions: %v", err)

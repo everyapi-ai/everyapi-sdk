@@ -98,6 +98,38 @@ type Token struct {
 	BudgetAlertThreshold int    `json:"budget_alert_threshold"`
 }
 
+// TokenBudget is the server-enforced current-period budget snapshot for one
+// relay key. Amounts use the gateway's quota unit; clients project them to USD
+// with StatusData.QuotaPerUnit rather than assuming a deployment-specific rate.
+type TokenBudget struct {
+	BudgetEnabled  bool `json:"budget_enabled"`
+	DailySpent     int  `json:"daily_spent"`
+	DailyBudget    int  `json:"daily_budget"`
+	MonthlySpent   int  `json:"monthly_spent"`
+	MonthlyBudget  int  `json:"monthly_budget"`
+	AlertThreshold int  `json:"alert_threshold"`
+}
+
+// GetTokenBudget returns server-enforced daily/monthly spend and limits for a
+// token owned by the authenticated user.
+func (c *Client) GetTokenBudget(ctx context.Context, id int) (*TokenBudget, error) {
+	if id <= 0 {
+		return nil, errors.New("invalid token id")
+	}
+	var env struct {
+		Success bool        `json:"success"`
+		Message string      `json:"message"`
+		Data    TokenBudget `json:"data"`
+	}
+	if err := c.do(ctx, "GET", fmt.Sprintf("/api/token/%d/budget", id), nil, &env); err != nil {
+		return nil, err
+	}
+	if !env.Success {
+		return nil, errors.New(env.Message)
+	}
+	return &env.Data, nil
+}
+
 // TokenCreate is the POST /api/token/ payload. The backend rejects names > 50 chars, negative quotas (when not unlimited), and quotas above 1e9 * QuotaPerUnit — let the server enforce; surface the returned message verbatim instead of duplicating the rules here.
 type TokenCreate struct {
 	Name               string  `json:"name"`
@@ -136,6 +168,24 @@ type TokenUpdate struct {
 	DailyBudget          int    `json:"daily_budget"`
 	MonthlyBudget        int    `json:"monthly_budget"`
 	BudgetAlertThreshold int    `json:"budget_alert_threshold"`
+}
+
+// UpdateRequest returns the complete full-overwrite payload for this token.
+// Callers may change the fields they own afterwards. Keeping this mapping in
+// the SDK prevents a narrow client update from silently clearing newer token
+// policy fields added by another surface.
+func (t Token) UpdateRequest() TokenUpdate {
+	return TokenUpdate{
+		ID: t.ID, Name: t.Name, Status: t.Status, ExpiredTime: t.ExpiredTime,
+		RemainQuota: t.RemainQuota, UnlimitedQuota: t.UnlimitedQuota,
+		ModelLimitsEnabled: t.ModelLimitsEnabled, ModelLimits: t.ModelLimits,
+		AllowIPs: t.AllowIPs, Group: t.Group, CrossGroupRetry: t.CrossGroupRetry,
+		AutoGroupExclusions: t.AutoGroupExclusions, SpecificChannelID: t.SpecificChannelID,
+		Scopes: t.Scopes, SupplierStrategy: t.SupplierStrategy,
+		SupplierSellerIDs: t.SupplierSellerIDs, BudgetEnabled: t.BudgetEnabled,
+		DailyBudget: t.DailyBudget, MonthlyBudget: t.MonthlyBudget,
+		BudgetAlertThreshold: t.BudgetAlertThreshold,
+	}
 }
 
 // GetToken fetches a single token by id (masked key). Returns the envelope's data field as a *Token; backend 404s become an error surfaced from the envelope's message.

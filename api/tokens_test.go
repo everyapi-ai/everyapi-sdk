@@ -199,6 +199,45 @@ func TestGetToken(t *testing.T) {
 	}
 }
 
+func TestGetTokenBudget(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" || r.URL.Path != "/api/token/42/budget" {
+			t.Fatalf("got %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"data":{"budget_enabled":true,"daily_spent":120,"daily_budget":1000,"monthly_spent":2500,"monthly_budget":10000,"alert_threshold":80}}`))
+	}))
+	defer srv.Close()
+
+	got, err := New(srv.URL, "acc").WithUserID(7).GetTokenBudget(context.Background(), 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.BudgetEnabled || got.DailySpent != 120 || got.MonthlyBudget != 10000 || got.AlertThreshold != 80 {
+		t.Fatalf("budget = %+v", got)
+	}
+}
+
+func TestTokenUpdateRequestPreservesPolicyFields(t *testing.T) {
+	ip := "127.0.0.1"
+	channelID := 9
+	current := Token{
+		ID: 4, Name: "Auto", Status: TokenStatusEnabled, ExpiredTime: TokenExpiresNever,
+		RemainQuota: 8, UnlimitedQuota: true, ModelLimitsEnabled: true,
+		ModelLimits: "gpt", AllowIPs: &ip, Group: "auto", CrossGroupRetry: true,
+		AutoGroupExclusions: `["private"]`, SpecificChannelID: &channelID,
+		Scopes: "relay", SupplierStrategy: "allow", SupplierSellerIDs: "1,2",
+		BudgetEnabled: true, DailyBudget: 100, MonthlyBudget: 2000,
+		BudgetAlertThreshold: 80,
+	}
+	got := current.UpdateRequest()
+	if got.ID != current.ID || got.AllowIPs != current.AllowIPs ||
+		got.AutoGroupExclusions != current.AutoGroupExclusions ||
+		got.Scopes != current.Scopes || !got.BudgetEnabled || got.MonthlyBudget != 2000 {
+		t.Fatalf("update request lost policy: %+v", got)
+	}
+}
+
 func TestCreateToken(t *testing.T) {
 	t.Run("posts the payload verbatim", func(t *testing.T) {
 		var gotBody TokenCreate

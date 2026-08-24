@@ -81,22 +81,15 @@ type RelayModel struct {
 	SupportsThinking bool
 }
 
-// RelayModelDirectory carries the live relay-key catalogue. The legacy
-// presentation fields remain for source compatibility with SDK consumers, but
-// current gateways make the configured promotional allowlist authoritative and
-// therefore do not emit client-side model or group restrictions.
+// RelayModelDirectory carries the live relay-key catalogue. PromotionalOnly and RequiredGroup tell presentation clients to expose only the promotional smart route; the model list remains the gateway's authoritative callable catalogue.
 type RelayModelDirectory struct {
-	Models []RelayModel
-	// Deprecated: current gateways do not emit promotional_only.
+	Models          []RelayModel
 	PromotionalOnly bool
-	// Deprecated: current gateways do not emit required_group.
-	RequiredGroup string
+	RequiredGroup   string
 }
 
 // GetRelayModelDirectory lists the models the RELAY token can actually route
-// to. Build the client with the relay key (no EveryAPI-User-Id), mirroring what
-// a relayed tool sends. Legacy restriction fields are decoded only for backward
-// compatibility; clients must treat the returned model list as authoritative.
+// to. Build the client with the relay key (no EveryAPI-User-Id), mirroring what a relayed tool sends. Presentation clients must also honor the promotional metadata when choosing what to display.
 func (c *Client) GetRelayModelDirectory(ctx context.Context) (*RelayModelDirectory, error) {
 	var env struct {
 		Data []struct {

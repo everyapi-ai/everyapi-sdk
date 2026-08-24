@@ -232,20 +232,15 @@ type UserModel struct {
 	Vendor string `json:"vendor"`
 }
 
-// UserModelDirectory carries the visible account model catalogue. The legacy
-// presentation fields remain for source compatibility with SDK consumers, but
-// current gateways expose every concrete promotional allowlisted model.
+// UserModelDirectory carries the visible account model catalogue. PromotionalOnly and RequiredGroup tell presentation clients to expose only the promotional smart route.
 type UserModelDirectory struct {
-	Models []UserModel
-	// Deprecated: current gateways do not emit promotional_only.
+	Models          []UserModel
 	PromotionalOnly bool
-	// Deprecated: current gateways do not emit required_group.
-	RequiredGroup string
+	RequiredGroup   string
 }
 
 // GetUserModelDirectory returns the authoritative account model directory.
-// Blank model ids are removed so every caller receives a safe picker input.
-// Legacy restriction fields are decoded only for backward compatibility.
+// Blank model ids are removed so every caller receives a safe picker input. Presentation clients must also honor the promotional metadata when choosing what to display.
 func (c *Client) GetUserModelDirectory(ctx context.Context) (*UserModelDirectory, error) {
 	var env struct {
 		Success         bool        `json:"success"`

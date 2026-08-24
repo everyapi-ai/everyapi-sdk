@@ -81,14 +81,22 @@ type RelayModel struct {
 	SupportsThinking bool
 }
 
-// RelayModelDirectory carries the live relay-key catalogue plus an account-level presentation restriction. Clients that expose model pickers should honor RequiredGroup when PromotionalOnly is true instead of presenting concrete models that the promotional wallet cannot fund.
+// RelayModelDirectory carries the live relay-key catalogue. The legacy
+// presentation fields remain for source compatibility with SDK consumers, but
+// current gateways make the configured promotional allowlist authoritative and
+// therefore do not emit client-side model or group restrictions.
 type RelayModelDirectory struct {
-	Models          []RelayModel
+	Models []RelayModel
+	// Deprecated: current gateways do not emit promotional_only.
 	PromotionalOnly bool
-	RequiredGroup   string
+	// Deprecated: current gateways do not emit required_group.
+	RequiredGroup string
 }
 
-// GetRelayModelDirectory lists the models the RELAY token can actually route to and preserves account-level presentation restrictions returned by the gateway. Build the client with the relay key (no EveryAPI-User-Id), mirroring what a relayed tool sends.
+// GetRelayModelDirectory lists the models the RELAY token can actually route
+// to. Build the client with the relay key (no EveryAPI-User-Id), mirroring what
+// a relayed tool sends. Legacy restriction fields are decoded only for backward
+// compatibility; clients must treat the returned model list as authoritative.
 func (c *Client) GetRelayModelDirectory(ctx context.Context) (*RelayModelDirectory, error) {
 	var env struct {
 		Data []struct {
@@ -123,7 +131,9 @@ func (c *Client) GetRelayModelDirectory(ctx context.Context) (*RelayModelDirecto
 	return &RelayModelDirectory{Models: out, PromotionalOnly: env.PromotionalOnly, RequiredGroup: env.RequiredGroup}, nil
 }
 
-// RelayModelCatalog preserves the original list-only SDK surface for callers that do not render account restrictions.
+// RelayModelCatalog returns the authoritative live model list for this relay
+// key. Prefer this list-only surface unless legacy response metadata is needed
+// for wire compatibility.
 func (c *Client) RelayModelCatalog(ctx context.Context) ([]RelayModel, error) {
 	directory, err := c.GetRelayModelDirectory(ctx)
 	if err != nil {

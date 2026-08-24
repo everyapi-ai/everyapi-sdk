@@ -232,14 +232,20 @@ type UserModel struct {
 	Vendor string `json:"vendor"`
 }
 
-// UserModelDirectory carries the visible models plus any account-level restriction that changes how clients should present them. RequiredGroup is currently "auto" for promotional-only accounts because smart-everyapi must choose across the account's eligible platform-operated pools.
+// UserModelDirectory carries the visible account model catalogue. The legacy
+// presentation fields remain for source compatibility with SDK consumers, but
+// current gateways expose every concrete promotional allowlisted model.
 type UserModelDirectory struct {
-	Models          []UserModel
+	Models []UserModel
+	// Deprecated: current gateways do not emit promotional_only.
 	PromotionalOnly bool
-	RequiredGroup   string
+	// Deprecated: current gateways do not emit required_group.
+	RequiredGroup string
 }
 
-// GetUserModelDirectory returns the account model directory together with presentation restrictions. Blank model ids are removed so every caller receives a safe picker input.
+// GetUserModelDirectory returns the authoritative account model directory.
+// Blank model ids are removed so every caller receives a safe picker input.
+// Legacy restriction fields are decoded only for backward compatibility.
 func (c *Client) GetUserModelDirectory(ctx context.Context) (*UserModelDirectory, error) {
 	var env struct {
 		Success         bool        `json:"success"`
@@ -263,7 +269,9 @@ func (c *Client) GetUserModelDirectory(ctx context.Context) (*UserModelDirectory
 	return &UserModelDirectory{Models: out, PromotionalOnly: env.PromotionalOnly, RequiredGroup: env.RequiredGroup}, nil
 }
 
-// UserModels preserves the original list-only SDK surface for callers that do not render account restrictions.
+// UserModels returns the authoritative live model list for this account.
+// Prefer this list-only surface unless legacy response metadata is needed for
+// wire compatibility.
 func (c *Client) UserModels(ctx context.Context) ([]UserModel, error) {
 	directory, err := c.GetUserModelDirectory(ctx)
 	if err != nil {

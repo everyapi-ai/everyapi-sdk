@@ -127,16 +127,24 @@ func TestUserModels(t *testing.T) {
 				t.Errorf("path = %q", r.URL.Path)
 			}
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"success":true,"data":[{"id":"gpt-4o","vendor":"OpenAI"},{"id":"","vendor":""},{"id":"claude-sonnet-4","vendor":"Anthropic"}]}`))
+			w.Write([]byte(`{"success":true,"promotional_only":true,"required_group":"auto","data":[{"id":"gpt-4o","vendor":"OpenAI"},{"id":"","vendor":""},{"id":"claude-sonnet-4","vendor":"Anthropic"}]}`))
 		}))
 		defer srv.Close()
-		out, err := New(srv.URL, "acc").WithUserID(7).UserModels(context.Background())
+		client := New(srv.URL, "acc").WithUserID(7)
+		directory, err := client.GetUserModelDirectory(context.Background())
 		if err != nil {
-			t.Fatalf("UserModels: %v", err)
+			t.Fatalf("GetUserModelDirectory: %v", err)
 		}
+		out := directory.Models
 		if len(out) != 2 || out[0].ID != "gpt-4o" || out[0].Vendor != "OpenAI" ||
 			out[1].ID != "claude-sonnet-4" || out[1].Vendor != "Anthropic" {
 			t.Errorf("blank entries not filtered or vendor lost; got %+v", out)
+		}
+		if !directory.PromotionalOnly || directory.RequiredGroup != "auto" {
+			t.Errorf("restriction metadata lost; got %+v", directory)
+		}
+		if compatible, compatErr := client.UserModels(context.Background()); compatErr != nil || len(compatible) != 2 {
+			t.Errorf("UserModels compatibility wrapper = %+v, %v", compatible, compatErr)
 		}
 	})
 }

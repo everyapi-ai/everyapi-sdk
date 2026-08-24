@@ -145,15 +145,20 @@ func TestRelayModels(t *testing.T) {
 func TestRelayModelCatalog(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"success":true,"object":"list","data":[` +
+		w.Write([]byte(`{"success":true,"object":"list","promotional_only":true,"required_group":"auto","data":[` +
 			`{"id":"glm-5.1","owned_by":"zhipu_4v","supported_endpoint_types":["anthropic","openai"],"chat_completions_bridge":true,"context_window":131072,"max_output":16384,"supports_thinking":true},` +
 			`{"id":""},` +
 			`{"id":"image-01","owned_by":"minimax","supported_endpoint_types":["image-generation"]}]}`))
 	}))
 	defer srv.Close()
-	got, err := New(srv.URL, "relay-key").RelayModelCatalog(context.Background())
+	client := New(srv.URL, "relay-key")
+	directory, err := client.GetRelayModelDirectory(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	got := directory.Models
+	if !directory.PromotionalOnly || directory.RequiredGroup != "auto" {
+		t.Errorf("restriction metadata lost; got %+v", directory)
 	}
 	if len(got) != 2 {
 		t.Fatalf("got %d models, want 2 (blank id filtered): %+v", len(got), got)
@@ -182,5 +187,8 @@ func TestRelayModelCatalog(t *testing.T) {
 	}
 	if got[1].SupportsThinking {
 		t.Error("model[1] supports_thinking = true, want false for omitted field")
+	}
+	if compatible, compatErr := client.RelayModelCatalog(context.Background()); compatErr != nil || len(compatible) != 2 {
+		t.Errorf("RelayModelCatalog compatibility wrapper = %+v, %v", compatible, compatErr)
 	}
 }

@@ -81,8 +81,15 @@ type RelayModel struct {
 	SupportsThinking bool
 }
 
-// RelayModelCatalog lists the models the RELAY token can actually route to, read from the same GET /v1/models endpoint ProbeRelayToken hits (OpenAI-compatible `{ "data": [ { "id", "owned_by", "supported_endpoint_types" } ] }`). Unlike UserModels (GET /api/user/models, scoped to the management account), this reflects the token's group binding — so a picker built on it only offers models the launched tool will really reach. Build the client with the relay key (no EveryAPI-User-Id), mirroring what a relayed tool sends. Blank ids are filtered so callers needn't dedupe.
-func (c *Client) RelayModelCatalog(ctx context.Context) ([]RelayModel, error) {
+// RelayModelDirectory carries the live relay-key catalogue plus an account-level presentation restriction. Clients that expose model pickers should honor RequiredGroup when PromotionalOnly is true instead of presenting concrete models that the promotional wallet cannot fund.
+type RelayModelDirectory struct {
+	Models          []RelayModel
+	PromotionalOnly bool
+	RequiredGroup   string
+}
+
+// GetRelayModelDirectory lists the models the RELAY token can actually route to and preserves account-level presentation restrictions returned by the gateway. Build the client with the relay key (no EveryAPI-User-Id), mirroring what a relayed tool sends.
+func (c *Client) GetRelayModelDirectory(ctx context.Context) (*RelayModelDirectory, error) {
 	var env struct {
 		Data []struct {
 			ID                     string   `json:"id"`
@@ -93,6 +100,8 @@ func (c *Client) RelayModelCatalog(ctx context.Context) ([]RelayModel, error) {
 			MaxOutput              int      `json:"max_output"`
 			SupportsThinking       bool     `json:"supports_thinking"`
 		} `json:"data"`
+		PromotionalOnly bool   `json:"promotional_only"`
+		RequiredGroup   string `json:"required_group"`
 	}
 	if err := c.do(ctx, "GET", "/v1/models", nil, &env); err != nil {
 		return nil, err
@@ -111,7 +120,16 @@ func (c *Client) RelayModelCatalog(ctx context.Context) ([]RelayModel, error) {
 			})
 		}
 	}
-	return out, nil
+	return &RelayModelDirectory{Models: out, PromotionalOnly: env.PromotionalOnly, RequiredGroup: env.RequiredGroup}, nil
+}
+
+// RelayModelCatalog preserves the original list-only SDK surface for callers that do not render account restrictions.
+func (c *Client) RelayModelCatalog(ctx context.Context) ([]RelayModel, error) {
+	directory, err := c.GetRelayModelDirectory(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return directory.Models, nil
 }
 
 // RelayModels is RelayModelCatalog projected to just the ids, backing the `everyapi use hermes` picker (which lists every routable model, not one provider's). Blank ids are already filtered by the catalog.

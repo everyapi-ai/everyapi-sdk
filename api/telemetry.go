@@ -232,12 +232,21 @@ type UserModel struct {
 	Vendor string `json:"vendor"`
 }
 
-// UserModels returns the models the caller's group can route to, each with its vendor. Filters out any blank entries the backend's defensive pass missed — callers shouldn't have to dedupe "".
-func (c *Client) UserModels(ctx context.Context) ([]UserModel, error) {
+// UserModelDirectory carries the visible models plus any account-level restriction that changes how clients should present them. RequiredGroup is currently "auto" for promotional-only accounts because smart-everyapi must choose across the account's eligible platform-operated pools.
+type UserModelDirectory struct {
+	Models          []UserModel
+	PromotionalOnly bool
+	RequiredGroup   string
+}
+
+// GetUserModelDirectory returns the account model directory together with presentation restrictions. Blank model ids are removed so every caller receives a safe picker input.
+func (c *Client) GetUserModelDirectory(ctx context.Context) (*UserModelDirectory, error) {
 	var env struct {
-		Success bool        `json:"success"`
-		Message string      `json:"message"`
-		Data    []UserModel `json:"data"`
+		Success         bool        `json:"success"`
+		Message         string      `json:"message"`
+		Data            []UserModel `json:"data"`
+		PromotionalOnly bool        `json:"promotional_only"`
+		RequiredGroup   string      `json:"required_group"`
 	}
 	if err := c.do(ctx, "GET", "/api/user/models", nil, &env); err != nil {
 		return nil, err
@@ -251,7 +260,16 @@ func (c *Client) UserModels(ctx context.Context) ([]UserModel, error) {
 			out = append(out, m)
 		}
 	}
-	return out, nil
+	return &UserModelDirectory{Models: out, PromotionalOnly: env.PromotionalOnly, RequiredGroup: env.RequiredGroup}, nil
+}
+
+// UserModels preserves the original list-only SDK surface for callers that do not render account restrictions.
+func (c *Client) UserModels(ctx context.Context) ([]UserModel, error) {
+	directory, err := c.GetUserModelDirectory(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return directory.Models, nil
 }
 
 // UserGroups returns every configured route-group entity keyed by stable ID, as an ANONYMOUS caller sees it. Callers display Name, send ID on the wire, and offer only Usable entities for new selections. The special "auto" entity is included when configured.

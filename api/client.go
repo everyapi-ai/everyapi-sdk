@@ -26,10 +26,11 @@ import (
 
 // Client wraps http.Client with a base URL and the user's access token (when present). Construct one per command — the CLI is a short-lived process, no connection pooling concerns.
 type Client struct {
-	base   string
-	token  string
-	userID int
-	hc     *http.Client
+	base      string
+	token     string
+	userID    int
+	userAgent string
+	hc        *http.Client
 }
 
 // API endpoints consumed by the CLI return compact JSON envelopes. Bound the response before buffering so a broken proxy or compromised endpoint cannot exhaust the local process while it constructs an error or decodes JSON.
@@ -70,6 +71,12 @@ func (c *Client) WithCookieJar() *Client {
 // Set during credentials load — pass the cached value from credentials.json so we don't have to call /api/user/self before every other call just to discover our own id.
 func (c *Client) WithUserID(id int) *Client {
 	c.userID = id
+	return c
+}
+
+// WithUserAgent identifies the product surface making the request. Use a stable product/version value for operator-facing diagnostics; it is context, not a trusted identity signal.
+func (c *Client) WithUserAgent(userAgent string) *Client {
+	c.userAgent = userAgent
 	return c
 }
 
@@ -149,6 +156,9 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	// UserAuth requires a positive EveryAPI-User-Id alongside the bearer (see WithUserID's doc for rationale). Skip the header when userID isn't set so unauthenticated endpoints (/api/cli/device-auth-start, /api/status) don't ship a bogus "0".
 	if c.userID > 0 {
 		req.Header.Set("EveryAPI-User-Id", strconv.Itoa(c.userID))
+	}
+	if c.userAgent != "" {
+		req.Header.Set("User-Agent", c.userAgent)
 	}
 	// Backend's i18n middleware (backend/internal/i18n) reads Accept-Language and routes error messages to the matching translation table. We source the value from EVERYAPI_LANG — CLI's main() sets it once from settings.json on startup so every SDK call here picks it up without each command's newClient() helper having to call WithLanguage. Backend understands "en" and "zh" (prefix match — zh-CN / zh-TW route to zh). Empty env → no header → backend default (typically en).
 	if lang := os.Getenv("EVERYAPI_LANG"); lang != "" {

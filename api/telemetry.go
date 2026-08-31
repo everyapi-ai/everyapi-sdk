@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
@@ -72,11 +74,51 @@ type PricingRow struct {
 	OwnerBy         string  `json:"owner_by,omitempty"`
 }
 
+// LocalizedName is a route-group display name as /api/pricing serves it: a
+// {lang: text} object. Older deployments send a bare string for the same field,
+// and both decode here, so one SDK build talks to either. Nothing else in the
+// payload carries a language, hence Resolve rather than a decode-time locale.
+type LocalizedName map[string]string
+
+// UnmarshalJSON accepts the localized object and the legacy bare string. A
+// string is stored under "en", which is exactly where Resolve's final fallback
+// looks, so a legacy name renders unchanged whatever language is configured.
+func (n *LocalizedName) UnmarshalJSON(data []byte) error {
+	var localized map[string]string
+	if err := json.Unmarshal(data, &localized); err == nil {
+		*n = localized
+		return nil
+	}
+	var legacy string
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return fmt.Errorf("route group name is neither a localized object nor a string: %w", err)
+	}
+	*n = LocalizedName{"en": legacy}
+	return nil
+}
+
+// Resolve picks the display name for language, mirroring the backend's own
+// fallback order: exact tag, then its base subtag, then English. It returns ""
+// when none of those carry text, leaving the caller to fall back to the group
+// id rather than printing a blank column.
+func (n LocalizedName) Resolve(language string) string {
+	language = strings.ToLower(strings.TrimSpace(language))
+	if value := strings.TrimSpace(n[language]); value != "" {
+		return value
+	}
+	if base, _, ok := strings.Cut(language, "-"); ok {
+		if value := strings.TrimSpace(n[base]); value != "" {
+			return value
+		}
+	}
+	return strings.TrimSpace(n["en"])
+}
+
 // Pricing wraps the /api/pricing payload: the rate sheet, the caller's group→ratio map, and which groups they're allowed to route through. supported_endpoint + vendors + auto_groups are dropped — adding them is a one-field SDK change when a CLI needs them.
 type Pricing struct {
-	Rows        []PricingRow       `json:"data"`
-	GroupRatio  map[string]float64 `json:"group_ratio"`
-	UsableGroup map[string]string  `json:"usable_group"`
+	Rows        []PricingRow             `json:"data"`
+	GroupRatio  map[string]float64       `json:"group_ratio"`
+	UsableGroup map[string]LocalizedName `json:"usable_group"`
 }
 
 // GroupInfo is one canonical route-group entity from /api/user/groups. ID is the stable routing/billing key, Name is display-only, and Usable is the caller-specific permission projection. Ratio is numeric for concrete groups and a label for the synthetic "auto" entry, hence `any`.
@@ -324,7 +366,7 @@ func (c *Client) routeGroups(ctx context.Context, path string) (map[string]Group
 func (c *Client) GetPricing(ctx context.Context) (*Pricing, error) {
 	var env Pricing
 	env.GroupRatio = map[string]float64{}
-	env.UsableGroup = map[string]string{}
+	env.UsableGroup = map[string]LocalizedName{}
 	// /api/pricing wraps fields at the top level of the response (data, group_ratio, usable_group, …) — no `success` envelope. The standalone struct is what we want; decode straight into it.
 	if err := c.do(ctx, "GET", "/api/pricing", nil, &env); err != nil {
 		return nil, err

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -210,7 +211,7 @@ func TestGetPricing(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		// /api/pricing returns flat fields (no success envelope) — the SDK decodes the response straight into Pricing.
-		w.Write([]byte(`{"data":[{"model_name":"gpt-4o","quota_type":0,"model_ratio":2.5,"completion_ratio":3,"owner_by":"openai"}],"group_ratio":{"grp_M3K-NEhOUc":1.0,"grp_Byteplus01":0.8},"usable_group":{"grp_M3K-NEhOUc":"standard","grp_Byteplus01":"BytePlus"}}`))
+		w.Write([]byte(`{"data":[{"model_name":"gpt-4o","quota_type":0,"model_ratio":2.5,"completion_ratio":3,"owner_by":"openai"}],"group_ratio":{"grp_M3K-NEhOUc":1.0,"grp_Byteplus01":0.8},"usable_group":{"grp_M3K-NEhOUc":"standard","grp_Byteplus01":{"en":"BytePlus","zh":"火山专线"}}}`))
 	}))
 	defer srv.Close()
 	p, err := New(srv.URL, "acc").WithUserID(7).GetPricing(context.Background())
@@ -220,7 +221,41 @@ func TestGetPricing(t *testing.T) {
 	if len(p.Rows) != 1 || p.Rows[0].ModelName != "gpt-4o" || p.Rows[0].ModelRatio != 2.5 {
 		t.Errorf("rows: %+v", p.Rows)
 	}
-	if p.GroupRatio["grp_Byteplus01"] != 0.8 || p.UsableGroup["grp_Byteplus01"] != "BytePlus" {
+	if p.GroupRatio["grp_Byteplus01"] != 0.8 || p.UsableGroup["grp_Byteplus01"].Resolve("zh") != "火山专线" {
 		t.Errorf("group fields: ratio=%v usable=%v", p.GroupRatio, p.UsableGroup)
+	}
+	// A deployment predating the localized payload sends a bare string; it has to
+	// keep rendering, and under any language, since there is nothing to fall back from.
+	if got := p.UsableGroup["grp_M3K-NEhOUc"].Resolve("zh"); got != "standard" {
+		t.Errorf("legacy string group name = %q, want standard", got)
+	}
+}
+
+func TestLocalizedNameResolvesLanguageThenBaseTagThenEnglish(t *testing.T) {
+	name := LocalizedName{"en": "Dedicated route", "zh": "专线"}
+	for _, tc := range []struct{ language, want string }{
+		{"zh", "专线"},
+		{"zh-CN", "专线"},
+		{"ZH", "专线"},
+		{"fr-FR", "Dedicated route"},
+		{"", "Dedicated route"},
+	} {
+		if got := name.Resolve(tc.language); got != tc.want {
+			t.Errorf("Resolve(%q) = %q, want %q", tc.language, got, tc.want)
+		}
+	}
+	// No English fallback and no match leaves the caller to substitute the id.
+	if got := (LocalizedName{"zh": "专线"}).Resolve("fr"); got != "" {
+		t.Errorf("Resolve without an English fallback = %q, want empty", got)
+	}
+	if got := (LocalizedName(nil)).Resolve("en"); got != "" {
+		t.Errorf("Resolve on an absent name = %q, want empty", got)
+	}
+}
+
+func TestLocalizedNameRejectsUnusableJSON(t *testing.T) {
+	var name LocalizedName
+	if err := json.Unmarshal([]byte(`42`), &name); err == nil {
+		t.Fatal("a numeric route group name must be reported, not silently dropped")
 	}
 }

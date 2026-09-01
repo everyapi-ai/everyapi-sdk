@@ -42,6 +42,19 @@ type Settings struct {
 
 	// ToolReasoningLevels remembers the reasoning/thinking level each tool was last launched with, keyed by tool name. Same reason as ToolModels: the level a user sets inside codex lands in its config.toml, and that file lives in the process-scoped CODEX_HOME `everyapi use` deletes on exit, so the client cannot remember it on its own. Values are the level names the launched tool understands ("low", "medium", "high", "xhigh", "max", "ultra" for codex; pi adds "off"/"minimal"), because the tools do not share one scale — a level is only ever read back by the tool that wrote it.
 	ToolReasoningLevels map[string]string `json:"tool_reasoning_levels,omitempty"`
+
+	// ClaudeLongContext controls whether an `everyapi use claude` launch boots an Opus model with Claude Code's `[1m]` marker, which is the only thing that makes the client request Anthropic's context-1m-2025-08-07 beta. Nil (unset) means on, matching what Claude Code's own Default resolves to for Opus outside the gateway.
+	//
+	// It is a setting rather than a constant because the beta is account-gated upstream and the gateway forwards the client's anthropic-beta header verbatim (relay/channel/claude's CommonClaudeHeadersOperation). On a relay key whose Anthropic channel is not enabled for long context, every request in the session is rejected outright rather than merely running at 200K, and nothing in the catalogue distinguishes such a key beforehand. `everyapi settings set claude_long_context false` is the escape.
+	ClaudeLongContext *bool `json:"claude_long_context,omitempty"`
+}
+
+// ClaudeLongContextEnabled reports whether an Opus launch should ask for the 1M context beta. Unset means enabled: the launch should match what the same model does under a bare `claude`, and a user who has never heard of the setting is the one for whom the default has to be the useful value.
+func (s *Settings) ClaudeLongContextEnabled() bool {
+	if s == nil || s.ClaudeLongContext == nil {
+		return true
+	}
+	return *s.ClaudeLongContext
 }
 
 // ToolModel returns the remembered model for a tool, or "" when the user has not chosen one yet.

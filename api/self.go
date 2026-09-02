@@ -81,7 +81,7 @@ type RelayModel struct {
 	SupportsThinking bool
 }
 
-// RelayModelDirectory carries the live relay-key catalogue. PromotionalOnly and RequiredGroup tell presentation clients to expose only the promotional smart route; the model list remains the gateway's authoritative callable catalogue.
+// RelayModelDirectory carries the live relay-key catalogue. PromotionalOnly and RequiredGroup tell presentation clients to stay on the promotional route group; the model list contains smart-everyapi plus concrete promotional-eligible routes.
 type RelayModelDirectory struct {
 	Models          []RelayModel
 	PromotionalOnly bool

@@ -274,7 +274,7 @@ type UserModel struct {
 	Vendor string `json:"vendor"`
 }
 
-// UserModelDirectory carries the visible account model catalogue. PromotionalOnly and RequiredGroup tell presentation clients to expose only the promotional smart route.
+// UserModelDirectory carries the visible account model catalogue. PromotionalOnly and RequiredGroup tell presentation clients to stay on the promotional route group while retaining concrete promotional-eligible models.
 type UserModelDirectory struct {
 	Models          []UserModel
 	PromotionalOnly bool

@@ -104,3 +104,51 @@ func TestWalkJSON_NumericScopeOffInToolArgs(t *testing.T) {
 		t.Errorf("tool-argument text must NOT allow numeric detectors")
 	}
 }
+
+// TestWalkJSON_StringElementsOfArrayAreScanned guards the array-leaf hole: a string that is a DIRECT element of a JSON array used to re-enter walkJSON as a bare string, match no case and return unchanged, so no detector ever ran on it. Batch embeddings (`input: ["..."]`), Anthropic `content: ["..."]` and any string list nested in a text-scoped subtree were forwarded in plaintext.
+func TestWalkJSON_StringElementsOfArrayAreScanned(t *testing.T) {
+	textKeys := map[string]bool{"input": true, "content": true}
+	root := map[string]any{
+		"model": "text-embedding-3-small", // out of scope
+		"input": []any{"first-secret", "second-secret"},
+		"content": []any{
+			map[string]any{"type": "text", "tags": []any{"nested-secret"}},
+		},
+		"stop": []any{"###"}, // out of scope: `stop` is control metadata
+	}
+	visited := map[string]bool{}
+	walkJSON(root, textKeys, false, true, func(s string, _ bool) string {
+		visited[s] = true
+		return "REDACTED"
+	})
+	for _, want := range []string{"first-secret", "second-secret", "nested-secret"} {
+		if !visited[want] {
+			t.Errorf("string element %q of an in-scope array was not visited (leak)", want)
+		}
+	}
+	if visited["###"] || visited["text-embedding-3-small"] {
+		t.Errorf("out-of-scope strings were visited: %v", visited)
+	}
+	got, _ := root["input"].([]any)
+	if len(got) != 2 || got[0] != "REDACTED" || got[1] != "REDACTED" {
+		t.Errorf("array elements were not rewritten in place: %#v", root["input"])
+	}
+}
+
+// TestWalkJSON_DataURLElementOfArrayExcluded: the data:-URL exclusion must hold for array elements too, so an inline base64 image passed as a bare string is never scanned or rewritten.
+func TestWalkJSON_DataURLElementOfArrayExcluded(t *testing.T) {
+	textKeys := map[string]bool{"content": true}
+	dataURL := "data:image/png;base64,AKIAIOSFODNN7EXAMPLE"
+	root := map[string]any{"content": []any{dataURL, "scan me"}}
+	visited := map[string]bool{}
+	walkJSON(root, textKeys, false, true, func(s string, _ bool) string {
+		visited[s] = true
+		return s
+	})
+	if visited[dataURL] {
+		t.Errorf("data: URL array element was scanned")
+	}
+	if !visited["scan me"] {
+		t.Errorf("sibling text element should still be scanned")
+	}
+}

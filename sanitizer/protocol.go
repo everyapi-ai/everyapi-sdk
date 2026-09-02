@@ -109,6 +109,13 @@ func walkJSON(v any, textKeys map[string]bool, inScope, numericOK bool, fn func(
 		return t
 	case []any:
 		for i, child := range t {
+			// A string that is a DIRECT element of an array is a leaf and must be scanned here: recursing into walkJSON with a bare string falls through to `default` and returns it untouched, which silently skipped batch shapes such as embeddings `input: ["..."]`, Anthropic `content: ["..."]`, and any string list nested inside a text-scoped subtree.
+			if s, ok := child.(string); ok {
+				if inScope && !isDataURL(s) {
+					t[i] = fn(s, numericOK)
+				}
+				continue
+			}
 			t[i] = walkJSON(child, textKeys, inScope, numericOK, fn)
 		}
 		return t

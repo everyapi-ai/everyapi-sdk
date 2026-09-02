@@ -303,3 +303,67 @@ func TestRewrite_PathMatch(t *testing.T) {
 		}
 	}
 }
+
+// TestOpenAI_BatchEmbeddingsInputArray is the canonical shape of /v1/embeddings: `input` as an array of plain strings. Before the walkJSON array-leaf fix the whole batch was relayed verbatim while the scalar form was masked.
+func TestOpenAI_BatchEmbeddingsInputArray(t *testing.T) {
+	body := mustJSON(t, map[string]any{
+		"model": "text-embedding-3-small",
+		"input": []any{"my aws key is AKIAIOSFODNN7EXAMPLE ok", "harmless second entry"},
+	})
+	p := &OpenAIProtocol{}
+	out, err := p.RewriteRequest(body, BuiltinDetectors(), NewMapping())
+	if err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	if strings.Contains(string(out), "AKIAIOSFODNN7EXAMPLE") {
+		t.Errorf("secret in batch embeddings input array leaked: %s", out)
+	}
+	if !strings.Contains(string(out), PlaceholderPrefix) {
+		t.Errorf("placeholder missing: %s", out)
+	}
+	if !strings.Contains(string(out), "harmless second entry") {
+		t.Errorf("clean sibling entry damaged: %s", out)
+	}
+}
+
+// TestOpenAI_LegacyCompletionsPrompt: PathMatch claims /v1/completions, so its `prompt` (and FIM `suffix`) must be in scope; they previously were not, so the legacy surface was claimed by the proxy and then forwarded unmasked.
+func TestOpenAI_LegacyCompletionsPrompt(t *testing.T) {
+	p := &OpenAIProtocol{}
+	if !p.PathMatch("/v1/completions") {
+		t.Fatalf("test premise broken: /v1/completions is no longer claimed")
+	}
+	for _, body := range [][]byte{
+		mustJSON(t, map[string]any{"model": "gpt-3.5-turbo-instruct", "prompt": "my aws key is AKIAIOSFODNN7EXAMPLE ok"}),
+		mustJSON(t, map[string]any{"model": "gpt-3.5-turbo-instruct", "prompt": []any{"my aws key is AKIAIOSFODNN7EXAMPLE ok"}}),
+		mustJSON(t, map[string]any{"model": "gpt-3.5-turbo-instruct", "prompt": "def f():", "suffix": "# AKIAIOSFODNN7EXAMPLE"}),
+	} {
+		out, err := p.RewriteRequest(body, BuiltinDetectors(), NewMapping())
+		if err != nil {
+			t.Fatalf("rewrite: %v", err)
+		}
+		if strings.Contains(string(out), "AKIAIOSFODNN7EXAMPLE") {
+			t.Errorf("legacy completions secret leaked for %s: %s", body, out)
+		}
+		if !strings.Contains(string(out), `"model":"gpt-3.5-turbo-instruct"`) {
+			t.Errorf("model field damaged: %s", out)
+		}
+	}
+}
+
+// TestAnthropic_ContentStringArray: Anthropic accepts `content` as an array of plain strings; each element is user text and must be scanned.
+func TestAnthropic_ContentStringArray(t *testing.T) {
+	body := mustJSON(t, map[string]any{
+		"model": "claude-3-5-sonnet",
+		"messages": []any{
+			map[string]any{"role": "user", "content": []any{"key AKIAIOSFODNN7EXAMPLE here"}},
+		},
+	})
+	p := &AnthropicProtocol{}
+	out, err := p.RewriteRequest(body, BuiltinDetectors(), NewMapping())
+	if err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	if strings.Contains(string(out), "AKIAIOSFODNN7EXAMPLE") {
+		t.Errorf("secret in string-array content leaked: %s", out)
+	}
+}

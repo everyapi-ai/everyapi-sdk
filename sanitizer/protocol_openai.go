@@ -39,6 +39,8 @@ var openaiTextKeys = map[string]bool{
 	"description":  true, // tools[].function.description, schemas
 	"input":        true, // embeddings input string
 	"instructions": true, // /v1/responses
+	"prompt":       true, // legacy /v1/completions prompt (string or array of strings)
+	"suffix":       true, // legacy /v1/completions FIM suffix
 	// "name" is deliberately NOT scanned: it's a routing identifier (function name / speaker label). Masking it corrupts the tool schema and can 400 the request (placeholder-in-function-name).
 }
 

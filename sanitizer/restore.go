@@ -69,6 +69,14 @@ func restoreJSONValue(v any, m *Mapping) (any, bool) {
 	case []any:
 		changed := false
 		for i, child := range t {
+			// String elements of an array are leaves; recursing would hit `default` and leave a placeholder unrestored in the buffered-JSON path.
+			if s, ok := child.(string); ok {
+				if ns, c := restoreInText(s, m); c {
+					t[i] = ns
+					changed = true
+				}
+				continue
+			}
 			nv, c := restoreJSONValue(child, m)
 			t[i] = nv
 			if c {

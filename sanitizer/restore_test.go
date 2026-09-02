@@ -133,3 +133,22 @@ func TestRestore_NDJSONPerLine(t *testing.T) {
 		t.Errorf("clean ndjson line mangled: %s", out)
 	}
 }
+
+// TestRestoreBuffered_PlaceholderInStringArray mirrors the walkJSON array-leaf hole on the way back: a placeholder echoed as a direct element of a JSON array used to reach the SDK as a literal <<__EVERYAPI_SECRET_...__>> token in the buffered (non-streaming) response path.
+func TestRestoreBuffered_PlaceholderInStringArray(t *testing.T) {
+	m := NewMapping()
+	ph := m.PutOrGet("sk-ant-REALKEY-abcdefghijklmnop")
+	body, _ := json.Marshal(map[string]any{
+		"data": []any{"echoing " + ph, "clean"},
+	})
+	out := restoreBufferedJSON(body, m)
+	if !strings.Contains(string(out), "sk-ant-REALKEY-abcdefghijklmnop") {
+		t.Errorf("placeholder in string array not restored: %s", out)
+	}
+	if strings.Contains(string(out), PlaceholderPrefix) {
+		t.Errorf("placeholder leaked through: %s", out)
+	}
+	if !json.Valid(out) {
+		t.Errorf("restored body is not valid JSON: %s", out)
+	}
+}

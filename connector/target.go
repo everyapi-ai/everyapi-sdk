@@ -167,6 +167,7 @@ func DefaultTargets() []Target {
 			Name:  "openai",
 			Hosts: []string{"api.openai.com"},
 			Routes: []Route{
+				{Method: http.MethodPost, Exact: "/v1/alpha/search", Action: ActionRelay},
 				{Method: http.MethodPost, Exact: "/v1/responses/compact", Action: ActionRelay},
 				{Method: http.MethodPost, Exact: "/v1/responses", Action: ActionRelay},
 				{Method: http.MethodGet, Exact: "/v1/responses", Action: ActionBlock, RejectStatus: http.StatusUpgradeRequired},

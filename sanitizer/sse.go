@@ -159,7 +159,12 @@ func (r *SSERestorer) processEvent(eventName string, data, raw []byte) []byte {
 			sl.set(emit)
 			modified = true
 		}
-		r.saveTemplate(sl.idx, eventName, obj, sl.set)
+		// Only a slot that is holding a tail can ever be flushed, and a later event for the same slot either replaces the carry (and the template with it) or clears both. Saving the template only alongside a live carry keeps the two in lockstep and avoids the deep copy on the overwhelmingly common no-carry path.
+		if carry != "" {
+			r.saveTemplate(sl.idx, eventName, obj)
+		} else {
+			delete(r.tmpl, sl.idx)
+		}
 	}
 
 	if !modified {
@@ -173,14 +178,51 @@ func (r *SSERestorer) processEvent(eventName string, data, raw []byte) []byte {
 }
 
 // saveTemplate records how to synthesise a flush event for a block: re- render the most recent display-delta event for that block with a given text. Used to emit a held tail at block-stop / stream-end.
-func (r *SSERestorer) saveTemplate(idx int, eventName string, obj map[string]any, set func(string)) {
+//
+// The template renders a private deep copy of the event with every SIBLING display slot blanked, never the live obj. One event can carry several display slots (Gemini thought + text parts in one candidate, OpenAI choices with n>1) and they all share one decoded object, so re-serialising that object at flush time would replay the siblings' already-delivered text and duplicate it in the client's transcript. Blanking rather than deleting keeps the array shapes and indices intact, so the synthetic event stays a well-formed delta for the flushed slot alone.
+func (r *SSERestorer) saveTemplate(idx int, eventName string, obj map[string]any) {
+	clone, ok := deepCopyJSON(obj).(map[string]any)
+	if !ok {
+		return
+	}
+	var own func(string)
+	for _, sl := range displaySlots(clone) {
+		if sl.idx == idx {
+			own = sl.set
+			continue
+		}
+		sl.set("")
+	}
+	if own == nil {
+		return
+	}
 	r.tmpl[idx] = func(text string) []byte {
-		set(text)
-		js, err := encodeJSONNoHTMLEscape(obj)
+		own(text)
+		js, err := encodeJSONNoHTMLEscape(clone)
 		if err != nil {
 			return nil
 		}
 		return renderEvent(eventName, js)
+	}
+}
+
+// deepCopyJSON clones a value decoded by encoding/json (with UseNumber), so a rewrite of the copy cannot reach the original. Scalars — string, bool, json.Number, nil — are immutable and returned as-is.
+func deepCopyJSON(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, item := range t {
+			out[k] = deepCopyJSON(item)
+		}
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, item := range t {
+			out[i] = deepCopyJSON(item)
+		}
+		return out
+	default:
+		return v
 	}
 }
 

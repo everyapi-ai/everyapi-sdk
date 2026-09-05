@@ -529,3 +529,90 @@ func TestSSE_AnthropicThinkingDeltaRestore(t *testing.T) {
 		assertSSEDataValid(t, out)
 	})
 }
+
+// ---- Flush must not replay sibling slots ----------------------------------
+
+// TestSSE_FlushDoesNotReplaySiblingSlots pins the per-slot isolation of the synthetic flush event. When one SSE event carries more than one display slot (a Gemini candidate with a thought part plus a text part, or an OpenAI chunk with n>1 choices), each slot's flush template must emit ONLY its own held tail. Re-serialising the whole shared event object would ride the siblings' already-delivered text along with the flush and duplicate it in the client's transcript.
+func TestSSE_FlushDoesNotReplaySiblingSlots(t *testing.T) {
+	t.Run("gemini two parts", func(t *testing.T) {
+		r := NewSSERestorer(NewMapping())
+		// Part 1 ends on a bare "<", a proper prefix of the placeholder prefix, so its tail is held back until Final.
+		out := string(r.Write([]byte(sseGeminiEvent([][]string{{"AAA", "BBB<"}})))) + string(r.Final())
+
+		lanes := sseGeminiLanes(t, out)
+		if lanes[0] != "AAA" {
+			t.Errorf("part 0 lane = %q, want %q (its text must be delivered exactly once)", lanes[0], "AAA")
+		}
+		if lanes[1] != "BBB<" {
+			t.Errorf("part 1 lane = %q, want %q", lanes[1], "BBB<")
+		}
+	})
+
+	t.Run("openai two choices", func(t *testing.T) {
+		r := NewSSERestorer(NewMapping())
+		data, _ := json.Marshal(map[string]any{"choices": []any{
+			map[string]any{"index": 0, "delta": map[string]any{"content": "AAA<"}},
+			map[string]any{"index": 1, "delta": map[string]any{"content": "BBB<"}},
+		}})
+		out := string(r.Write([]byte("data: "+string(data)+"\n\n"))) + string(r.Write([]byte("data: [DONE]\n\n")))
+
+		lanes := sseOpenAIChoiceText(t, out)
+		if lanes[0] != "AAA<" {
+			t.Errorf("choice 0 = %q, want %q", lanes[0], "AAA<")
+		}
+		if lanes[1] != "BBB<" {
+			t.Errorf("choice 1 = %q, want %q", lanes[1], "BBB<")
+		}
+	})
+}
+
+// sseGeminiLanes concatenates the restored part texts per part position across every emitted event, which is what a client that appends parts in array order actually accumulates.
+func sseGeminiLanes(t *testing.T, out string) map[int]string {
+	t.Helper()
+	lanes := make(map[int]string)
+	for _, parts := range sseGeminiPartsByEvent(t, out) {
+		for i, p := range parts {
+			lanes[i] += p
+		}
+	}
+	return lanes
+}
+
+// sseOpenAIChoiceText concatenates the restored delta.content per choice index across every emitted event.
+func sseOpenAIChoiceText(t *testing.T, out string) map[int]string {
+	t.Helper()
+	lanes := make(map[int]string)
+	for _, ev := range strings.Split(out, "\n\n") {
+		for _, line := range strings.Split(ev, "\n") {
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+			data := strings.TrimPrefix(line, "data: ")
+			if !json.Valid([]byte(data)) {
+				continue
+			}
+			var obj map[string]any
+			_ = json.Unmarshal([]byte(data), &obj)
+			choices, ok := obj["choices"].([]any)
+			if !ok {
+				continue
+			}
+			for _, c := range choices {
+				cm, ok := c.(map[string]any)
+				if !ok {
+					continue
+				}
+				idx := 0
+				if n, ok := cm["index"].(float64); ok {
+					idx = int(n)
+				}
+				if delta, ok := cm["delta"].(map[string]any); ok {
+					if s, ok := delta["content"].(string); ok {
+						lanes[idx] += s
+					}
+				}
+			}
+		}
+	}
+	return lanes
+}

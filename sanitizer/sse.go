@@ -196,6 +196,8 @@ func (r *SSERestorer) saveTemplate(idx int, eventName string, obj map[string]any
 	if own == nil {
 		return
 	}
+	// Blanking display slots is not enough on its own: displaySlots deliberately never returns tool-argument sinks or stream-terminal metadata, so those ride along in the clone and the synthetic flush event replays them too.
+	stripNonDisplayPayload(clone)
 	r.tmpl[idx] = func(text string) []byte {
 		own(text)
 		js, err := encodeJSONNoHTMLEscape(clone)
@@ -203,6 +205,53 @@ func (r *SSERestorer) saveTemplate(idx int, eventName string, obj map[string]any
 			return nil
 		}
 		return renderEvent(eventName, js)
+	}
+}
+
+// stripNonDisplayPayload removes from a flush-template clone everything that is not the flushed slot's own text. A synthetic flush event is an EXTRA event appended after the real one, so anything it still carries is delivered to the client twice: a Gemini candidate that mixes a text part with a functionCall part would invoke the same tool a second time, and the finishReason / usageMetadata that providers attach to their last chunk would be reported twice. Gemini functionCall parts are replaced by an empty text part rather than removed so every other part keeps its array position, which is the lane a client accumulates into. OpenAI's finish_reason is nulled rather than deleted because content chunks normally carry the key with a null value.
+func stripNonDisplayPayload(clone map[string]any) {
+	delete(clone, "usageMetadata")
+	delete(clone, "usage")
+	if choices, ok := clone["choices"].([]any); ok {
+		for _, c := range choices {
+			cm, ok := c.(map[string]any)
+			if !ok {
+				continue
+			}
+			if cm["finish_reason"] != nil {
+				cm["finish_reason"] = nil
+			}
+			if delta, ok := cm["delta"].(map[string]any); ok {
+				delete(delta, "tool_calls")
+				delete(delta, "function_call")
+			}
+		}
+	}
+	if cands, ok := clone["candidates"].([]any); ok {
+		for _, c := range cands {
+			cm, ok := c.(map[string]any)
+			if !ok {
+				continue
+			}
+			delete(cm, "finishReason")
+			content, ok := cm["content"].(map[string]any)
+			if !ok {
+				continue
+			}
+			parts, ok := content["parts"].([]any)
+			if !ok {
+				continue
+			}
+			for i, p := range parts {
+				pm, ok := p.(map[string]any)
+				if !ok {
+					continue
+				}
+				if _, isFC := pm["functionCall"]; isFC {
+					parts[i] = map[string]any{"text": ""}
+				}
+			}
+		}
 	}
 }
 
@@ -233,7 +282,10 @@ func (r *SSERestorer) flushBlock(idx int) []byte {
 		return nil
 	}
 	delete(r.pending, idx)
-	if tmpl := r.tmpl[idx]; tmpl != nil {
+	// Drop the template with the carry it belongs to: a template is only ever saved alongside a live carry, so keeping it past the flush would leave a spent deep copy of the event pinned for the rest of the stream and break the tmpl/pending lockstep the save path relies on.
+	tmpl := r.tmpl[idx]
+	delete(r.tmpl, idx)
+	if tmpl != nil {
 		return tmpl(carry)
 	}
 	return nil

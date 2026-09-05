@@ -566,6 +566,59 @@ func TestSSE_FlushDoesNotReplaySiblingSlots(t *testing.T) {
 	})
 }
 
+// TestSSE_FlushDoesNotReplayNonDisplayPayload extends the isolation guarantee past the display slots. The synthetic flush event is an EXTRA event appended after the real one, so any tool-call payload or stream-terminal metadata still riding on it is delivered to the client twice: a Gemini candidate that mixes a text part with a functionCall part would invoke the same tool a second time, and the finishReason / usageMetadata of the last chunk would be reported twice.
+func TestSSE_FlushDoesNotReplayNonDisplayPayload(t *testing.T) {
+	t.Run("gemini function call and terminal metadata", func(t *testing.T) {
+		r := NewSSERestorer(NewMapping())
+		data, _ := json.Marshal(map[string]any{
+			"candidates": []any{map[string]any{
+				"content": map[string]any{"parts": []any{
+					map[string]any{"text": "here <"},
+					map[string]any{"functionCall": map[string]any{"name": "deleteFile", "args": map[string]any{"path": "/tmp/x"}}},
+				}},
+				"finishReason": "STOP",
+			}},
+			"usageMetadata": map[string]any{"totalTokenCount": 42},
+		})
+		out := string(r.Write([]byte("data: "+string(data)+"\n\n"))) + string(r.Final())
+
+		assertSSEDataValid(t, out)
+		if got := strings.Count(out, "deleteFile"); got != 1 {
+			t.Errorf("functionCall delivered %d times, want 1: %s", got, out)
+		}
+		if got := strings.Count(out, "totalTokenCount"); got != 1 {
+			t.Errorf("usageMetadata delivered %d times, want 1: %s", got, out)
+		}
+		if got := strings.Count(out, "STOP"); got != 1 {
+			t.Errorf("finishReason delivered %d times, want 1: %s", got, out)
+		}
+		if lanes := sseGeminiLanes(t, out); lanes[0] != "here <" {
+			t.Errorf("part 0 lane = %q, want %q", lanes[0], "here <")
+		}
+	})
+
+	t.Run("openai tool calls and finish reason", func(t *testing.T) {
+		r := NewSSERestorer(NewMapping())
+		data, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{
+			"index":         0,
+			"delta":         map[string]any{"content": "here <", "tool_calls": []any{map[string]any{"index": 0, "id": "call_abc", "function": map[string]any{"name": "deleteFile"}}}},
+			"finish_reason": "stop",
+		}}})
+		out := string(r.Write([]byte("data: "+string(data)+"\n\n"))) + string(r.Write([]byte("data: [DONE]\n\n")))
+
+		assertSSEDataValid(t, out)
+		if got := strings.Count(out, "call_abc"); got != 1 {
+			t.Errorf("tool_calls delivered %d times, want 1: %s", got, out)
+		}
+		if got := strings.Count(out, `"stop"`); got != 1 {
+			t.Errorf("finish_reason delivered %d times, want 1: %s", got, out)
+		}
+		if lanes := sseOpenAIChoiceText(t, out); lanes[0] != "here <" {
+			t.Errorf("choice 0 = %q, want %q", lanes[0], "here <")
+		}
+	})
+}
+
 // sseGeminiLanes concatenates the restored part texts per part position across every emitted event, which is what a client that appends parts in array order actually accumulates.
 func sseGeminiLanes(t *testing.T, out string) map[int]string {
 	t.Helper()

@@ -3,6 +3,7 @@ package sanitizer
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"sort"
 )
 
@@ -140,8 +141,18 @@ func (r *SSERestorer) processEvent(eventName string, data, raw []byte) []byte {
 	}
 
 	modified := false
+	claimed := make(map[int]bool, len(slots))
 	for _, sl := range slots {
 		text := sl.get()
+		if claimed[sl.idx] {
+			// A second slot claiming an index another slot in this same event already holds: two OpenAI choices that both report index 0, or that both omit it. The stream is malformed and the two lanes are not distinguishable, so this slot is restored on its own text and kept out of the carryover bookkeeping entirely — sharing the pending entry would prefix the first lane's held tail onto this one's text, and sharing the template would replay one lane's text on the other's flush event. Emitting a would-be partial instead of holding it is what every flush already does and can never resolve a real secret.
+			if restored, _ := restoreInText(text, r.m); restored != text {
+				sl.set(restored)
+				modified = true
+			}
+			continue
+		}
+		claimed[sl.idx] = true
 		combined := r.pending[sl.idx] + text
 		restored, _ := restoreInText(combined, r.m)
 		emit := restored
@@ -187,7 +198,8 @@ func (r *SSERestorer) saveTemplate(idx int, eventName string, obj map[string]any
 	}
 	var own func(string)
 	for _, sl := range displaySlots(clone) {
-		if sl.idx == idx {
+		// Adopt the FIRST slot at this index and blank every other slot, including a second one claiming the same index. Two OpenAI choices can collide on an index (both reporting 0, or both omitting it); adopting each in turn would leave the earlier one unblanked and replay its full text on the flush event. displaySlots visits the clone in the same order as the original, so the adopted slot is the one that owns the carry.
+		if own == nil && sl.idx == idx {
 			own = sl.set
 			continue
 		}
@@ -196,8 +208,8 @@ func (r *SSERestorer) saveTemplate(idx int, eventName string, obj map[string]any
 	if own == nil {
 		return
 	}
-	// Blanking display slots is not enough on its own: displaySlots deliberately never returns tool-argument sinks or stream-terminal metadata, so those ride along in the clone and the synthetic flush event replays them too.
-	stripNonDisplayPayload(clone)
+	// Blanking display slots is not enough on its own: displaySlots deliberately never returns tool-argument sinks, non-text parts, per-token metadata, or stream-terminal metadata, so those ride along in the clone and the synthetic flush event replays them too.
+	reduceToDisplayPayload(clone)
 	r.tmpl[idx] = func(text string) []byte {
 		own(text)
 		js, err := encodeJSONNoHTMLEscape(clone)
@@ -208,22 +220,29 @@ func (r *SSERestorer) saveTemplate(idx int, eventName string, obj map[string]any
 	}
 }
 
-// stripNonDisplayPayload removes from a flush-template clone everything that is not the flushed slot's own text. A synthetic flush event is an EXTRA event appended after the real one, so anything it still carries is delivered to the client twice: a Gemini candidate that mixes a text part with a functionCall part would invoke the same tool a second time, and the finishReason / usageMetadata that providers attach to their last chunk would be reported twice. Gemini functionCall parts are replaced by an empty text part rather than removed so every other part keeps its array position, which is the lane a client accumulates into. OpenAI's finish_reason is nulled rather than deleted because content chunks normally carry the key with a null value.
-func stripNonDisplayPayload(clone map[string]any) {
-	delete(clone, "usageMetadata")
-	delete(clone, "usage")
+// reduceToDisplayPayload strips a flush-template clone down to the display slots plus the framing a client needs to route them. A synthetic flush event is an EXTRA event appended after the real one, so anything it still carries is delivered to the client twice: a Gemini candidate that mixes a text part with a functionCall part would invoke the same tool a second time, an inlineData / executableCode / codeExecutionResult / fileData part would be re-delivered whole, OpenAI's logprobs would describe text this event does not carry, and the finishReason / usageMetadata that providers attach to their last chunk would be reported twice.
+//
+// The reduction is an ALLOWLIST, and that is the whole point. Two earlier rounds of this fix named the offending fields one layer at a time — sibling display slots, then tool calls and terminal metadata — and each round left the next unnamed field riding along. Keeping only what the flush event is known to need means a field a provider adds tomorrow is dropped by default instead of duplicated by default. For Gemini parts the allowlist is geminiDisplayPart, the same predicate displaySlots admits by, so the two cannot drift apart: a part displaySlots would not return is exactly a part the flush event neutralises.
+//
+// Neutralised Gemini parts are replaced by an empty text part rather than removed so every other part keeps its array position, which is the lane a client accumulates into. OpenAI's finish_reason is kept and nulled rather than dropped because content chunks normally carry the key with a null value.
+func reduceToDisplayPayload(clone map[string]any) {
+	// One top-level allowlist for every shape rather than one per shape: it keeps all three display-slot containers (delta, choices, candidates) plus the chunk identity each protocol needs, so the reduction can never delete the object the flush template writes its held tail into. The alternative — reducing by the shape the event looks like — silently drops the tail on an event that mixes two shapes.
+	keepOnly(clone, "type", "index", "delta", "choices", "candidates", "id", "object", "created", "model", "service_tier", "system_fingerprint", "modelVersion", "responseId")
+	if delta, ok := clone["delta"].(map[string]any); ok {
+		keepOnly(delta, "type", "text", "thinking")
+	}
 	if choices, ok := clone["choices"].([]any); ok {
 		for _, c := range choices {
 			cm, ok := c.(map[string]any)
 			if !ok {
 				continue
 			}
-			if cm["finish_reason"] != nil {
+			keepOnly(cm, "index", "delta", "finish_reason")
+			if _, ok := cm["finish_reason"]; ok {
 				cm["finish_reason"] = nil
 			}
 			if delta, ok := cm["delta"].(map[string]any); ok {
-				delete(delta, "tool_calls")
-				delete(delta, "function_call")
+				keepOnly(delta, "content")
 			}
 		}
 	}
@@ -233,26 +252,52 @@ func stripNonDisplayPayload(clone map[string]any) {
 			if !ok {
 				continue
 			}
-			delete(cm, "finishReason")
+			keepOnly(cm, "index", "content")
 			content, ok := cm["content"].(map[string]any)
 			if !ok {
 				continue
 			}
+			keepOnly(content, "role", "parts")
 			parts, ok := content["parts"].([]any)
 			if !ok {
 				continue
 			}
 			for i, p := range parts {
-				pm, ok := p.(map[string]any)
-				if !ok {
+				pm := geminiDisplayPart(p)
+				if pm == nil {
+					parts[i] = map[string]any{"text": ""}
 					continue
 				}
-				if _, isFC := pm["functionCall"]; isFC {
-					parts[i] = map[string]any{"text": ""}
-				}
+				// The part map needs the same reduction as every level above it, or the allowlist stops one level short and an admitted part carries its unnamed neighbours through: thoughtSignature and videoMetadata ride along today, and whatever Gemini adds to a text part tomorrow would ride along by default. thought is kept because a candidate can carry a thought part and an answer part at once, and dropping the marker would deliver a flushed thinking tail as ordinary content.
+				keepOnly(pm, "text", "thought")
 			}
 		}
 	}
+}
+
+// keepOnly deletes every key of m outside keep. Deleting in place (rather than building a fresh map) matters: the flush template holds a closure over the delta / part map it writes the held tail into, and replacing the map would leave that closure writing to an object no longer in the clone.
+func keepOnly(m map[string]any, keep ...string) {
+	for k := range m {
+		if !slices.Contains(keep, k) {
+			delete(m, k)
+		}
+	}
+}
+
+// geminiDisplayPart returns a decoded Gemini part as an object when it is human-display text, and nil for every other part shape. It is the single source of truth for both directions of the Gemini branch: displaySlots restores exactly the parts this admits, and reduceToDisplayPayload neutralises exactly the parts this rejects.
+func geminiDisplayPart(p any) map[string]any {
+	pm, ok := p.(map[string]any)
+	if !ok {
+		return nil
+	}
+	// A part carrying a functionCall is the tool-argument sink (P3): never display text, even when it also carries a text field.
+	if _, isFC := pm["functionCall"]; isFC {
+		return nil
+	}
+	if _, ok := pm["text"].(string); !ok {
+		return nil
+	}
+	return pm
 }
 
 // deepCopyJSON clones a value decoded by encoding/json (with UseNumber), so a rewrite of the copy cannot reach the original. Scalars — string, bool, json.Number, nil — are immutable and returned as-is.
@@ -381,7 +426,7 @@ func displaySlots(obj map[string]any) []textSlot {
 		}
 	}
 
-	// Gemini streamGenerateContent: candidates[].content.parts[].text. Skip parts carrying a functionCall — that's the tool-arg sink (P3), handled like Anthropic input_json_delta / OpenAI tool_calls (never restored).
+	// Gemini streamGenerateContent: candidates[].content.parts[].text, admitted by geminiDisplayPart. Every other part shape — functionCall (the tool-arg sink, P3, handled like Anthropic input_json_delta / OpenAI tool_calls), inlineData, executableCode, codeExecutionResult, fileData, and anything Gemini adds later — is not display text and is never restored.
 	if cands, ok := obj["candidates"].([]any); ok {
 		for ci, c := range cands {
 			cm, ok := c.(map[string]any)
@@ -397,22 +442,16 @@ func displaySlots(obj map[string]any) []textSlot {
 				continue
 			}
 			for pi, p := range parts {
-				pm, ok := p.(map[string]any)
-				if !ok {
+				d := geminiDisplayPart(p)
+				if d == nil {
 					continue
 				}
-				if _, isFC := pm["functionCall"]; isFC {
-					continue
-				}
-				if _, ok := pm["text"].(string); ok {
-					d := pm
-					// Carryover slot key MUST be unique per (candidate, part): a single event can carry two text parts in one candidate (thought + answer), and multiple candidates often omit the index field — keying by the index field alone collapses them to one slot and bleeds one part's split-placeholder tail into another. Use array positions (stable across chunks). Gemini has no content_block_stop, so these flush at stream end via flushAll.
-					slots = append(slots, textSlot{
-						idx: ci*geminiPartStride + pi,
-						get: func() string { s, _ := d["text"].(string); return s },
-						set: func(v string) { d["text"] = v },
-					})
-				}
+				// Carryover slot key MUST be unique per (candidate, part): a single event can carry two text parts in one candidate (thought + answer), and multiple candidates often omit the index field — keying by the index field alone collapses them to one slot and bleeds one part's split-placeholder tail into another. Use array positions (stable across chunks). Gemini has no content_block_stop, so these flush at stream end via flushAll.
+				slots = append(slots, textSlot{
+					idx: ci*geminiPartStride + pi,
+					get: func() string { s, _ := d["text"].(string); return s },
+					set: func(v string) { d["text"] = v },
+				})
 			}
 		}
 	}

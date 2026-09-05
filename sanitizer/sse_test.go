@@ -2,6 +2,7 @@ package sanitizer
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -597,6 +598,44 @@ func TestSSE_FlushDoesNotReplayNonDisplayPayload(t *testing.T) {
 		}
 	})
 
+	t.Run("gemini non-text parts", func(t *testing.T) {
+		r := NewSSERestorer(NewMapping())
+		data, _ := json.Marshal(map[string]any{
+			"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{
+				map[string]any{"text": "here <"},
+				map[string]any{"inlineData": map[string]any{"mimeType": "image/png", "data": "SGVsbG8="}},
+				map[string]any{"executableCode": map[string]any{"language": "PYTHON", "code": "print(1)"}},
+				map[string]any{"codeExecutionResult": map[string]any{"outcome": "OUTCOME_OK", "output": "1"}},
+				map[string]any{"fileData": map[string]any{"fileUri": "gs://bucket/clip.mp4"}},
+			}}}},
+		})
+		out := string(r.Write([]byte("data: "+string(data)+"\n\n"))) + string(r.Final())
+
+		assertSSEDataValid(t, out)
+		// None of these part shapes is display text, so none of them may ride the flush event: an inlineData image or a codeExecutionResult would be appended to the transcript a second time, and an executableCode part re-delivered can be re-run.
+		for _, once := range []string{"inlineData", "executableCode", "codeExecutionResult", "fileData"} {
+			if got := strings.Count(out, once); got != 1 {
+				t.Errorf("%s part delivered %d times, want 1: %s", once, got, out)
+			}
+		}
+	})
+
+	t.Run("openai logprobs", func(t *testing.T) {
+		r := NewSSERestorer(NewMapping())
+		data, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{
+			"index":    0,
+			"delta":    map[string]any{"content": "here <"},
+			"logprobs": map[string]any{"content": []any{map[string]any{"token": "here", "logprob": -0.25}}},
+		}}})
+		out := string(r.Write([]byte("data: "+string(data)+"\n\n"))) + string(r.Final())
+
+		assertSSEDataValid(t, out)
+		// logprobs describes the tokens of the chunk it arrived on. Replaying it on the flush event both duplicates it and attaches it to text that event does not carry.
+		if got := strings.Count(out, "logprobs"); got != 1 {
+			t.Errorf("logprobs delivered %d times, want 1: %s", got, out)
+		}
+	})
+
 	t.Run("openai tool calls and finish reason", func(t *testing.T) {
 		r := NewSSERestorer(NewMapping())
 		data, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{
@@ -617,6 +656,181 @@ func TestSSE_FlushDoesNotReplayNonDisplayPayload(t *testing.T) {
 			t.Errorf("choice 0 = %q, want %q", lanes[0], "here <")
 		}
 	})
+}
+
+// TestSSE_FlushPadsNeutralisedGeminiPartPositions pins the padding, which is load-bearing and was previously unobservable. A Gemini client accumulates a candidate's parts by array position, so a part the flush event neutralises must be replaced by an empty text part and never removed — dropping it slides every later part one lane down and splices the flushed tail into a different part's text. The functionCall sits FIRST here on purpose: with it last, dropping and padding produce identical lane assignments and the assertion proves nothing.
+func TestSSE_FlushPadsNeutralisedGeminiPartPositions(t *testing.T) {
+	r := NewSSERestorer(NewMapping())
+	data, _ := json.Marshal(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{
+		map[string]any{"functionCall": map[string]any{"name": "deleteFile", "args": map[string]any{"path": "/tmp/x"}}},
+		map[string]any{"text": "here <"},
+	}}}}})
+	out := string(r.Write([]byte("data: "+string(data)+"\n\n"))) + string(r.Final())
+
+	assertSSEDataValid(t, out)
+	byEvent := sseGeminiRawPartsByEvent(t, out)
+	if len(byEvent) != 2 {
+		t.Fatalf("got %d events carrying candidate parts, want 2 (the real event then its flush): %s", len(byEvent), out)
+	}
+	if got := len(byEvent[0]); got != 2 {
+		t.Fatalf("real event carries %d parts, want the 2 it arrived with: %s", got, out)
+	}
+	flush := byEvent[1]
+	if got := len(flush); got != 2 {
+		t.Fatalf("flush event carries %d parts, want 2 — a neutralised part must be padded, not dropped: %s", got, out)
+	}
+	if want := map[string]any{"text": ""}; !reflect.DeepEqual(flush[0], want) {
+		t.Errorf("flush parts[0] = %#v, want %#v — the functionCall's position must be held open by an empty text part", flush[0], want)
+	}
+	if want := map[string]any{"text": "<"}; !reflect.DeepEqual(flush[1], want) {
+		t.Errorf("flush parts[1] = %#v, want %#v — the held tail belongs in the text part's own position", flush[1], want)
+	}
+}
+
+// TestSSE_FlushReducesAdmittedGeminiPartFields pins the leaf of the allowlist. Every other level drops unknown keys, so an admitted part must too: the flush event is an EXTRA event, and a field left on the part is delivered a second time. thoughtSignature is the live case — a client that accumulates parts echoes it back on the next turn, so a duplicate is a real protocol defect, not cosmetic. thought itself is kept, because a candidate can carry a thought part and an answer part at once and losing the marker delivers a flushed thinking tail as ordinary content.
+func TestSSE_FlushReducesAdmittedGeminiPartFields(t *testing.T) {
+	r := NewSSERestorer(NewMapping())
+	data, _ := json.Marshal(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"role": "model", "parts": []any{
+		map[string]any{"text": "let me think <", "thought": true, "thoughtSignature": "CtcBAdHtim9abc==", "videoMetadata": map[string]any{"fps": 1}},
+	}}, "index": 0}}, "modelVersion": "gemini-2.5-pro"})
+	out := string(r.Write([]byte("data: "+string(data)+"\n\n"))) + string(r.Final())
+
+	assertSSEDataValid(t, out)
+	byEvent := sseGeminiRawPartsByEvent(t, out)
+	if len(byEvent) != 2 {
+		t.Fatalf("got %d events carrying candidate parts, want 2 (the real event then its flush): %s", len(byEvent), out)
+	}
+	// The real event keeps every field it arrived with; only the trailing "<" is held back, because it may be the first byte of a split placeholder.
+	if got, want := byEvent[0][0], (map[string]any{"text": "let me think ", "thought": true, "thoughtSignature": "CtcBAdHtim9abc==", "videoMetadata": map[string]any{"fps": float64(1)}}); !reflect.DeepEqual(got, want) {
+		t.Errorf("real event parts[0] = %#v, want its own fields untouched %#v", got, want)
+	}
+	if got, want := byEvent[1][0], (map[string]any{"text": "<", "thought": true}); !reflect.DeepEqual(got, want) {
+		t.Errorf("flush parts[0] = %#v, want %#v — an admitted part must be reduced like every level above it, or its neighbours are delivered twice", got, want)
+	}
+	if n := strings.Count(out, "CtcBAdHtim9abc=="); n != 1 {
+		t.Errorf("thoughtSignature delivered %d times, want 1", n)
+	}
+}
+
+// TestSSE_CollidingChoiceIndex covers a malformed OpenAI chunk whose choices claim the same index — both reporting 0, or both omitting the field. The index is then not a lane identifier, so the two choices must not share one carryover slot: sharing the pending entry prefixes the first choice's held tail onto the second's text, and sharing the flush template replays the first choice's full text on the synthetic event. Neither choice's text may be duplicated, dropped, or moved into the other's lane.
+func TestSSE_CollidingChoiceIndex(t *testing.T) {
+	cases := []struct {
+		name       string
+		first      string
+		second     string
+		wantLane0  string
+		wantLane1  string
+		wantOnceIn []string
+	}{
+		{
+			name: "second choice ends mid-placeholder", first: "ALPHA", second: "BETA<",
+			wantLane0: "ALPHA", wantLane1: "BETA<", wantOnceIn: []string{"ALPHA", "BETA"},
+		},
+		{
+			name: "first choice ends mid-placeholder", first: "ALPHA<", second: "BETA",
+			wantLane0: "ALPHA<", wantLane1: "BETA", wantOnceIn: []string{"ALPHA", "BETA"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := NewSSERestorer(NewMapping())
+			data, _ := json.Marshal(map[string]any{"choices": []any{
+				map[string]any{"index": 0, "delta": map[string]any{"content": tc.first}},
+				map[string]any{"index": 0, "delta": map[string]any{"content": tc.second}},
+			}})
+			out := string(r.Write([]byte("data: "+string(data)+"\n\n"))) + string(r.Final())
+
+			assertSSEDataValid(t, out)
+			lanes := sseOpenAIChoiceLanes(t, out)
+			if lanes[0] != tc.wantLane0 {
+				t.Errorf("choice position 0 = %q, want %q: %s", lanes[0], tc.wantLane0, out)
+			}
+			if lanes[1] != tc.wantLane1 {
+				t.Errorf("choice position 1 = %q, want %q: %s", lanes[1], tc.wantLane1, out)
+			}
+			for _, once := range tc.wantOnceIn {
+				if got := strings.Count(out, once); got != 1 {
+					t.Errorf("%q delivered %d times, want 1: %s", once, got, out)
+				}
+			}
+		})
+	}
+}
+
+// sseGeminiRawPartsByEvent returns each emitted event's candidates[].content.parts entries exactly as decoded, in array order and unfiltered. sseGeminiPartsByEvent keeps only parts carrying a string text, which compacts every other part shape out of the picture — through that helper a flush template that dropped a neutralised part instead of padding it, shifting every later part into the wrong client lane, is structurally unobservable.
+func sseGeminiRawPartsByEvent(t *testing.T, out string) [][]any {
+	t.Helper()
+	var byEvent [][]any
+	for _, ev := range strings.Split(out, "\n\n") {
+		var parts []any
+		for _, line := range strings.Split(ev, "\n") {
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+			data := strings.TrimPrefix(line, "data: ")
+			if !json.Valid([]byte(data)) {
+				continue
+			}
+			var obj map[string]any
+			_ = json.Unmarshal([]byte(data), &obj)
+			cands, ok := obj["candidates"].([]any)
+			if !ok {
+				continue
+			}
+			for _, c := range cands {
+				cm, ok := c.(map[string]any)
+				if !ok {
+					continue
+				}
+				content, ok := cm["content"].(map[string]any)
+				if !ok {
+					continue
+				}
+				if ps, ok := content["parts"].([]any); ok {
+					parts = append(parts, ps...)
+				}
+			}
+		}
+		if len(parts) > 0 {
+			byEvent = append(byEvent, parts)
+		}
+	}
+	return byEvent
+}
+
+// sseOpenAIChoiceLanes concatenates the restored delta.content per choice ARRAY POSITION across every emitted event. Position, not the index field, is what still separates two lanes when a malformed chunk gives both choices the same index.
+func sseOpenAIChoiceLanes(t *testing.T, out string) map[int]string {
+	t.Helper()
+	lanes := make(map[int]string)
+	for _, ev := range strings.Split(out, "\n\n") {
+		for _, line := range strings.Split(ev, "\n") {
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+			data := strings.TrimPrefix(line, "data: ")
+			if !json.Valid([]byte(data)) {
+				continue
+			}
+			var obj map[string]any
+			_ = json.Unmarshal([]byte(data), &obj)
+			choices, ok := obj["choices"].([]any)
+			if !ok {
+				continue
+			}
+			for i, c := range choices {
+				cm, ok := c.(map[string]any)
+				if !ok {
+					continue
+				}
+				if delta, ok := cm["delta"].(map[string]any); ok {
+					if s, ok := delta["content"].(string); ok {
+						lanes[i] += s
+					}
+				}
+			}
+		}
+	}
+	return lanes
 }
 
 // sseGeminiLanes concatenates the restored part texts per part position across every emitted event, which is what a client that appends parts in array order actually accumulates.

@@ -968,3 +968,260 @@ func TestResolveRelayKey_AbsentSystemManagedFieldDecodesFalse(t *testing.T) {
 		t.Errorf("key = %q, want the auto key on a gateway without the field", got)
 	}
 }
+
+// The regression this tier exists for. /api/token/ is ordered id desc, so a token created minutes ago heads the list; when it is an auto-group key with a small quota it became autoPick for every default launch on the account, displacing an unlimited "Auto" key created long before it, and 401'd the moment it ran dry. The self-heal in `use` could not recover: invalidating the cache re-ran this selection, which returned the same dead key.
+func TestResolveRelayKey_DefaultGroupSkipsExhaustedAutoToken(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	srv := tokenListAndKeyServer(t,
+		[]map[string]interface{}{
+			{"id": 3621, "name": "newest-auto", "status": TokenStatusEnabled, "group": "auto", "remain_quota": -27142, "unlimited_quota": false},
+			{"id": 812, "name": "Auto", "status": TokenStatusEnabled, "group": "auto", "remain_quota": 0, "unlimited_quota": true},
+		},
+		map[int]string{3621: "sk-everyapi-drained-3621", 812: "sk-everyapi-auto-812"},
+	)
+	creds := &config.Credentials{APIBase: srv.URL, AccessToken: "tok", UserID: 1}
+	got, err := ResolveRelayKey(context.Background(), creds, "")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got != "sk-everyapi-auto-812" {
+		t.Errorf("key = %q, want the unlimited auto key", got)
+	}
+	if creds.RelayKeyTokenID != 812 {
+		t.Errorf("creds.RelayKeyTokenID = %d, want 812", creds.RelayKeyTokenID)
+	}
+}
+
+// unlimited_quota is authoritative over remain_quota, exactly as ValidateUserToken reads them: the unlimited key in the case above carries remain_quota 0 and must stay eligible. Pinned separately so a future refactor cannot reduce the rule to "remain_quota <= 0 is dead".
+func TestResolveRelayKey_UnlimitedQuotaOutranksZeroRemaining(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	srv := tokenListAndKeyServer(t,
+		[]map[string]interface{}{
+			{"id": 55, "name": "Auto", "status": TokenStatusEnabled, "group": "auto", "remain_quota": 0, "unlimited_quota": true},
+		},
+		map[int]string{55: "sk-everyapi-auto-55"},
+	)
+	creds := &config.Credentials{APIBase: srv.URL, AccessToken: "tok", UserID: 1}
+	got, err := ResolveRelayKey(context.Background(), creds, "")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got != "sk-everyapi-auto-55" {
+		t.Errorf("key = %q, want the unlimited key", got)
+	}
+}
+
+// The reason RemainQuota is a pointer. A gateway older than the field omits remain_quota on every row; decoding that into a plain int would read as "0 left" for the whole list and turn a healthy account into ErrNoRelayKey. Absent must mean unknown, and unknown must not disqualify.
+func TestResolveRelayKey_AbsentQuotaFieldsDoNotDisqualify(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	srv := tokenListAndKeyServer(t,
+		[]map[string]interface{}{
+			{"id": 40, "name": "Auto", "status": TokenStatusEnabled, "group": "auto"},
+		},
+		map[int]string{40: "sk-everyapi-auto-40"},
+	)
+	creds := &config.Credentials{APIBase: srv.URL, AccessToken: "tok", UserID: 1}
+	got, err := ResolveRelayKey(context.Background(), creds, "")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got != "sk-everyapi-auto-40" {
+		t.Errorf("key = %q, want the auto key on a gateway without the quota fields", got)
+	}
+}
+
+// Demotion must not become exclusion, same principle as the system-managed tier. An account that drained every key needs the gateway's own out-of-quota 401 — which the `use` preflight renders with a wallet link — not a local ErrNoRelayKey telling it to create a key it already has.
+func TestResolveRelayKey_FallsBackToExhaustedWhenEveryKeyIsDrained(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	srv := tokenListAndKeyServer(t,
+		[]map[string]interface{}{
+			{"id": 71, "name": "drained-auto", "status": TokenStatusEnabled, "group": "auto", "remain_quota": -5},
+			{"id": 70, "name": "drained-scoped", "status": TokenStatusEnabled, "group": "grp_basic", "remain_quota": 0},
+		},
+		map[int]string{71: "sk-everyapi-drained-71", 70: "sk-everyapi-drained-70"},
+	)
+	creds := &config.Credentials{APIBase: srv.URL, AccessToken: "tok", UserID: 1}
+	got, err := ResolveRelayKey(context.Background(), creds, "")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got != "sk-everyapi-drained-71" {
+		t.Errorf("key = %q, want the first exhausted key as a last resort", got)
+	}
+}
+
+// Ordering between the two demoted tiers: a system key still authenticates and merely narrows the catalogue, an exhausted key is refused outright, so the system key must win when both are all that is left.
+func TestResolveRelayKey_SystemManagedOutranksExhausted(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	srv := tokenListAndKeyServer(t,
+		[]map[string]interface{}{
+			{"id": 82, "name": "drained", "status": TokenStatusEnabled, "group": "auto", "remain_quota": -1},
+			{"id": 81, "name": "EveryAPI Connect AI Diagnostics", "status": TokenStatusEnabled, "group": "auto", "system_managed": true},
+		},
+		map[int]string{82: "sk-everyapi-drained-82", 81: "sk-everyapi-system-81"},
+	)
+	creds := &config.Credentials{APIBase: srv.URL, AccessToken: "tok", UserID: 1}
+	got, err := ResolveRelayKey(context.Background(), creds, "")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got != "sk-everyapi-system-81" {
+		t.Errorf("key = %q, want the system key ahead of the exhausted one", got)
+	}
+}
+
+// An explicit --group narrows the candidates but applies the same quota rule inside that group.
+func TestResolveRelayKey_ExplicitGroupSkipsExhausted(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	srv := tokenListAndKeyServer(t,
+		[]map[string]interface{}{
+			{"id": 96, "name": "drained-in-group", "status": TokenStatusEnabled, "group": "grp_basic", "remain_quota": 0},
+			{"id": 95, "name": "live-in-group", "status": TokenStatusEnabled, "group": "grp_basic", "remain_quota": 500},
+		},
+		map[int]string{96: "sk-everyapi-drained-96", 95: "sk-everyapi-live-95"},
+	)
+	creds := &config.Credentials{APIBase: srv.URL, AccessToken: "tok", UserID: 1}
+	got, err := ResolveRelayKey(context.Background(), creds, "grp_basic")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got != "sk-everyapi-live-95" {
+		t.Errorf("key = %q, want the key with quota left", got)
+	}
+	// Group-scoped resolution never caches; a --group run must not overwrite the default-group key.
+	if creds.RelayKey != "" {
+		t.Errorf("creds.RelayKey = %q, want the group path to leave the cache untouched", creds.RelayKey)
+	}
+}
+
+// SelectAutoRelayKey persists whatever it picks, and the default-group resolver serves that cache before it ever lists tokens — so adopting a drained auto key here pins the account to a dead key out of reach of the tiering above. Falling through to the create mints the canonical unlimited key instead, which also makes this terminate: the created key can never be exhausted.
+func TestSelectAutoRelayKeyReplacesExhaustedAutoKey(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	// Bound to a plain `want` rather than written inline after a "key" field: the secret scanner flags a high-entropy literal in that position, and a fake value in a test is not worth an ignore entry. Same reason as the const in TestResolveRelayKey_DefaultGroupSkipsUnusableAutoToken.
+	const want = "sk-everyapi-auto-33"
+	var created atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/token/":
+			items := []map[string]interface{}{{"id": 12, "name": "drained-auto", "status": TokenStatusEnabled, "group": "auto", "remain_quota": -9}}
+			if created.Load() {
+				items = append([]map[string]interface{}{{"id": 33, "name": "Auto", "status": TokenStatusEnabled, "group": "auto", "unlimited_quota": true}}, items...)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "data": map[string]interface{}{"items": items},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/token/":
+			var req TokenCreate
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Errorf("decode create request: %v", err)
+			}
+			if !req.UnlimitedQuota {
+				t.Errorf("replacement auto key must be unlimited, got %+v", req)
+			}
+			created.Store(true)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+		case r.URL.Path == "/api/token/33/key":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "data": map[string]interface{}{"key": want},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	creds := &config.Credentials{APIBase: srv.URL, AccessToken: "tok", UserID: 1}
+
+	wasCreated, err := SelectAutoRelayKey(context.Background(), creds)
+	if err != nil {
+		t.Fatalf("SelectAutoRelayKey: %v", err)
+	}
+	if !wasCreated || !created.Load() {
+		t.Fatal("drained auto key was adopted instead of replaced")
+	}
+	if creds.RelayKeyTokenID != 33 || creds.RelayKey != want {
+		t.Fatalf("created auto key not selected: %+v", creds)
+	}
+}
+
+// The exhausted tier must not disable the lost-auto-grant downgrade, exactly as the system-managed tier must not. Without the exhausted arm on `downgrade` the resolver keeps an auto key that expands to no pools — and that is the one failure the launch preflight cannot self-heal from, because an empty catalogue is a 200 and never invalidates the cached key. The drained key at least 401s, which does clear the cache and carries a top-up link.
+func TestResolveRelayKey_UnusableAutoDowngradesToExhaustedKey(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	const want = "sk-everyapi-drained-60"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/user/self/groups":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"data": map[string]interface{}{
+					"auto": map[string]interface{}{"id": "auto", "name": "Automatic", "usable": false},
+				},
+			})
+		case "/api/token/":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"data": map[string]interface{}{"items": []map[string]interface{}{
+					{"id": 61, "name": "Auto", "status": TokenStatusEnabled, "group": "auto", "unlimited_quota": true},
+					{"id": 60, "name": "scoped", "status": TokenStatusEnabled, "group": "grp_basic", "remain_quota": 0},
+				}},
+			})
+		case "/api/token/60/key":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "data": map[string]interface{}{"key": want},
+			})
+		default:
+			t.Errorf("unexpected request: %s", r.URL.Path)
+			http.Error(w, "not found", 404)
+		}
+	}))
+	defer srv.Close()
+
+	creds := &config.Credentials{APIBase: srv.URL, AccessToken: "tok", UserID: 1}
+	got, err := ResolveRelayKey(context.Background(), creds, "")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got != want || creds.RelayKeyTokenID != 60 {
+		t.Errorf("key = %q id = %d, want the drained scoped token over an auto key that routes nowhere", got, creds.RelayKeyTokenID)
+	}
+}
+
+// Skipping the drained auto key is only better while a replacement can actually be minted. POST /api/token/ refuses on the personal key ceiling and on the paid-account gate, and erroring out then would turn a working-if-drained setup into a hard failure — the drained key still reaches the gateway's own out-of-quota 401 with its top-up link.
+func TestSelectAutoRelayKeyKeepsExhaustedKeyWhenCreateFails(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	// See the note on the const in TestSelectAutoRelayKeyReplacesExhaustedAutoKey — an inline literal here trips the secret scanner's generic-api-key rule.
+	const want = "sk-everyapi-drained-21"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/token/":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"data": map[string]interface{}{"items": []map[string]interface{}{
+					{"id": 21, "name": "drained-auto", "status": TokenStatusEnabled, "group": "auto", "remain_quota": 0},
+				}},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/token/":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false, "message": "token limit reached for this account",
+			})
+		case r.URL.Path == "/api/token/21/key":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "data": map[string]interface{}{"key": want},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	creds := &config.Credentials{APIBase: srv.URL, AccessToken: "tok", UserID: 1}
+
+	wasCreated, err := SelectAutoRelayKey(context.Background(), creds)
+	if err != nil {
+		t.Fatalf("SelectAutoRelayKey: %v", err)
+	}
+	if wasCreated {
+		t.Error("wasCreated = true, want false — the create was refused")
+	}
+	if creds.RelayKeyTokenID != 21 || creds.RelayKey != want {
+		t.Fatalf("drained auto key was not kept as the last resort: %+v", creds)
+	}
+}

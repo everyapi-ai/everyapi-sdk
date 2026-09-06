@@ -26,6 +26,16 @@ type TokenSummary struct {
 	Group string `json:"group"`
 	// SystemManaged marks a key minted for an EveryAPI client rather than by the user. Such keys are deliberately model-limited, so ResolveRelayKey demotes them to a last resort — see the systemFallback arm there. Absent on gateways older than the field, where it decodes as false and selection behaves exactly as before.
 	SystemManaged bool `json:"system_managed"`
+	// RemainQuota / UnlimitedQuota mirror the two fields ValidateUserToken checks before it will authenticate a key (persistence.Token: `!UnlimitedQuota && RemainQuota <= 0` → ErrTokenInvalid → 401). Selection reads them so it stops handing out a key the gateway is guaranteed to reject — see TokenSummary.Exhausted.
+	//
+	// RemainQuota is a POINTER where SystemManaged is a plain bool, and the asymmetry is deliberate. Both fields are absent on older gateways, but their zero values mean opposite things: `false` reads as "not system-managed", which is the safe pre-field behaviour, while `0` reads as "no quota left" — for EVERY token on the list, collapsing selection to ErrNoRelayKey against an account whose keys are all fine. nil means "the gateway did not say" and keeps quota out of the decision entirely.
+	RemainQuota    *int `json:"remain_quota"`
+	UnlimitedQuota bool `json:"unlimited_quota"`
+}
+
+// Exhausted reports whether the gateway will reject this token for having no quota left, mirroring the ValidateUserToken rule verbatim so client-side selection and server-side authentication cannot disagree. False when the gateway omitted remain_quota (see the field comment) — an unknown quota must not disqualify a key.
+func (t TokenSummary) Exhausted() bool {
+	return t.RemainQuota != nil && !t.UnlimitedQuota && *t.RemainQuota <= 0
 }
 
 // ListTokens returns all of the user's relay API tokens (management API, UserAuth — caller must have set WithUserID). It follows pagination because disabled historical tokens can fill earlier pages while an older enabled key remains selectable on a later page.

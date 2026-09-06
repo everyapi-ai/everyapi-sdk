@@ -76,12 +76,18 @@ func ResolveRelayKey(ctx context.Context, creds *config.Credentials, group strin
 	//
 	// System-managed keys are held back in a third tier. They belong to an EveryAPI client rather than the user and are deliberately model-limited, so treating one as a normal candidate collapses every launched client's catalogue to that key's subset — the failure that motivated this tier: an account holding both its own auto key and the Connect app's shared diagnostics key (also auto-group) had launches routed through the diagnostics key, cutting a 23-model catalogue to 3 and 403-ing on the model Claude Code boots with. They stay eligible as a LAST resort: an account whose only enabled key is a system one must keep working, and "fewer models" beats ErrNoRelayKey.
 	var pick, autoPick, fallback *TokenSummary
-	// Held by value, not pointer: this one is consulted AFTER the auto-create branch below reassigns `tokens`, which would strand a pointer on the old backing array.
-	var systemFallback TokenSummary
-	haveSystemFallback := false
+	// Held by value, not pointer: these are consulted AFTER the auto-create branch below reassigns `tokens`, which would strand a pointer on the old backing array.
+	var systemFallback, exhaustedFallback TokenSummary
+	haveSystemFallback, haveExhaustedFallback := false, false
 	rememberSystem := func(t TokenSummary) {
 		if !haveSystemFallback {
 			systemFallback, haveSystemFallback = t, true
+		}
+	}
+	// A key with no quota left is held back in a tier BELOW the system-managed one, because it is the more certain failure of the two: a system key still authenticates and merely narrows the catalogue, while an exhausted key is rejected outright by ValidateUserToken. It stays a candidate for the same reason system keys do — an account whose keys are all exhausted must reach the gateway's own "out of quota" 401 with a wallet link, not a local ErrNoRelayKey that reads like the account has no keys at all.
+	rememberExhausted := func(t TokenSummary) {
+		if !haveExhaustedFallback {
+			exhaustedFallback, haveExhaustedFallback = t, true
 		}
 	}
 	for i := range tokens {
@@ -96,11 +102,20 @@ func ResolveRelayKey(ctx context.Context, creds *config.Credentials, group strin
 				rememberSystem(tokens[i])
 				continue
 			}
+			if tokens[i].Exhausted() {
+				rememberExhausted(tokens[i])
+				continue
+			}
 			pick = &tokens[i]
 			break
 		}
 		if tokens[i].SystemManaged {
 			rememberSystem(tokens[i])
+			continue
+		}
+		// Checked before the auto/fallback split rather than inside it: the list arrives newest-first (GetAllUserTokens orders by id desc), so a freshly created, small-quota auto key sits at its head and would otherwise become autoPick for every default launch on the account — silently displacing an unlimited "Auto" key created earlier and dying on 401 the moment it runs dry. That is the bug this tier exists to close, and the cache-invalidation self-heal in `use` could not: clearing the cache re-ran this same selection, which picked the same dead key again.
+		if tokens[i].Exhausted() {
+			rememberExhausted(tokens[i])
 			continue
 		}
 		if tokens[i].Group == GroupAuto {
@@ -119,6 +134,10 @@ func ResolveRelayKey(ctx context.Context, creds *config.Credentials, group strin
 		downgrade := fallback
 		if downgrade == nil && haveSystemFallback {
 			downgrade = &systemFallback
+		}
+		// The exhausted tier must not disable this downgrade either, for exactly the reason the system tier must not. An account whose only other enabled key is drained would otherwise keep an auto key already known to expand to nothing — and that failure is the one the launch preflight cannot self-heal from, because an empty catalogue is a 200 and never invalidates the cached key. The drained key answers with the gateway's own out-of-quota 401, which does invalidate the cache and carries a top-up link. Ranked below systemFallback, matching the tier order applied at the end of the resolver. Safe as a pointer for the same reason systemFallback is: this arm only runs for group == "".
+		if downgrade == nil && haveExhaustedFallback {
+			downgrade = &exhaustedFallback
 		}
 		switch {
 		case pick == nil:
@@ -146,21 +165,25 @@ func ResolveRelayKey(ctx context.Context, creds *config.Credentials, group strin
 		} else {
 			tokens = refreshed
 			for i := range tokens {
-				// Skip system keys here too: the account may already hold an EveryAPI-owned auto key, and matching it would hand back the narrow key we just created a replacement for.
-				if tokens[i].Status == TokenStatusEnabled && tokens[i].Group == GroupAuto && !tokens[i].SystemManaged {
+				// Skip system keys here too: the account may already hold an EveryAPI-owned auto key, and matching it would hand back the narrow key we just created a replacement for. Exhausted keys are skipped for the same reason — the point of this branch is to end up on the unlimited key it just created, and the list is newest-first only until another client creates one.
+				if tokens[i].Status == TokenStatusEnabled && tokens[i].Group == GroupAuto && !tokens[i].SystemManaged && !tokens[i].Exhausted() {
 					pick = &tokens[i]
 					break
 				}
 			}
 		}
 		// Only fatal when there is nothing to fall back to. An account holding an EveryAPI-owned auto key used to launch fine on it; now that such a key no longer satisfies the search, a failed create (token ceiling reached, network blip) would turn a working setup into a hard error. Prefer the narrower key — that is exactly the behaviour that shipped before this field existed.
-		if pick == nil && createErr != nil && !haveSystemFallback {
+		if pick == nil && createErr != nil && !haveSystemFallback && !haveExhaustedFallback {
 			return "", createErr
 		}
 	}
 	// Last resort, deliberately after the auto-create attempt: an account whose only enabled key is EveryAPI-owned is better served by a fresh key of its own than by the client-shared one. If no such key could be made, fall back rather than fail — that key's narrower model set still beats refusing to launch, and this is exactly the shape a user who only ever installed a client, never running the CLI, arrives in.
 	if pick == nil && haveSystemFallback {
 		pick = &systemFallback
+	}
+	// Below the system key: an exhausted key is the one candidate guaranteed to 401, so it is reached only once nothing else qualifies. Returning it beats ErrNoRelayKey, whose "create one in the dashboard" hint would be wrong advice for an account that has keys and simply needs to top up — the gateway answers that case with the out-of-quota 401 the `use` preflight already turns into a wallet link.
+	if pick == nil && haveExhaustedFallback {
+		pick = &exhaustedFallback
 	}
 	if pick == nil {
 		if group != "" {
@@ -264,10 +287,23 @@ func SelectAutoRelayKey(ctx context.Context, creds *config.Credentials) (bool, e
 	// Status is re-checked here even though ListEnabledTokens asks the gateway to filter: that filter is a query parameter an older gateway may ignore (see the pagination note on listTokens), and selecting a DISABLED auto token would persist a key that 401s on the very next launch. Matches the check ResolveRelayKey applies to the same list.
 	//
 	// System-managed keys are skipped for the same reason ResolveRelayKey demotes them, and it matters MORE here: this path PERSISTS its choice into creds.RelayKey, and the default-group arm of ResolveRelayKey returns that cache before it ever lists tokens. Matching an EveryAPI-owned auto key here would pin the account to that key's narrow model set on every subsequent launch, out of reach of the resolver's own tiering. The create below then gives the account an auto key of its own, which is exactly what it lacks.
+	//
+	// Exhausted keys are skipped on the same "persisted, then served from cache" reasoning: falling through to the create below mints the canonical unlimited key rather than pinning the account to a key the gateway already refuses. It cannot loop — the created key is UnlimitedQuota, so the next call matches it on this very scan.
+	//
+	// The skipped key is REMEMBERED rather than discarded, because the create is not guaranteed to succeed: the personal key ceiling, the paid-account gate on POST /api/token/, or a network blip all leave the account exactly where it started. Erroring out then would turn a working-if-drained setup into a hard failure, where persisting the drained key still lets the launch preflight render the gateway's own out-of-quota 401 with its top-up link. ResolveRelayKey guards its own create with the same rule. Held by value: the post-create branch reassigns `tokens`, which would strand a pointer on the old backing array.
+	var exhaustedAuto TokenSummary
+	haveExhaustedAuto := false
 	for _, token := range tokens {
-		if token.Status == TokenStatusEnabled && token.Group == GroupAuto && !token.SystemManaged {
-			return false, SelectRelayKey(ctx, creds, token.ID)
+		if token.Status != TokenStatusEnabled || token.Group != GroupAuto || token.SystemManaged {
+			continue
 		}
+		if token.Exhausted() {
+			if !haveExhaustedAuto {
+				exhaustedAuto, haveExhaustedAuto = token, true
+			}
+			continue
+		}
+		return false, SelectRelayKey(ctx, creds, token.ID)
 	}
 	if err := client.CreateToken(ctx, TokenCreate{
 		Name:            "Auto",
@@ -276,6 +312,10 @@ func SelectAutoRelayKey(ctx context.Context, creds *config.Credentials) (bool, e
 		Group:           GroupAuto,
 		CrossGroupRetry: true,
 	}); err != nil {
+		if haveExhaustedAuto {
+			// No replacement could be minted, so the drained key is the best answer left — same trade the resolver makes. Reported as not-created, which it wasn't.
+			return false, SelectRelayKey(ctx, creds, exhaustedAuto.ID)
+		}
 		return false, fmt.Errorf("create auto relay API key: %w", err)
 	}
 	tokens, err = client.ListEnabledTokens(ctx)
@@ -283,7 +323,7 @@ func SelectAutoRelayKey(ctx context.Context, creds *config.Credentials) (bool, e
 		return true, fmt.Errorf("look up created auto relay API key: %w", err)
 	}
 	for _, token := range tokens {
-		if token.Status == TokenStatusEnabled && token.Group == GroupAuto && !token.SystemManaged {
+		if token.Status == TokenStatusEnabled && token.Group == GroupAuto && !token.SystemManaged && !token.Exhausted() {
 			return true, SelectRelayKey(ctx, creds, token.ID)
 		}
 	}

@@ -75,6 +75,7 @@ func TestResolveRelayKey_CacheHit(t *testing.T) {
 		UserID:                1,
 		RelayKey:              "sk-everyapi-cached-xxx",
 		RelayKeySystemChecked: true,
+		RelayKeyQuotaChecked:  true,
 	}
 	got, err := ResolveRelayKey(context.Background(), creds, "")
 	if err != nil {
@@ -111,7 +112,7 @@ func TestResolveRelayKey_UnstampedCacheIsReresolvedOnce(t *testing.T) {
 	if got != "sk-everyapi-auto-478" {
 		t.Errorf("key = %q, want the stale system key replaced by the user's own", got)
 	}
-	if !creds.RelayKeySystemChecked {
+	if !creds.RelayKeySystemChecked || !creds.RelayKeyQuotaChecked {
 		t.Error("re-resolution did not stamp the cache, so it would repeat on every launch")
 	}
 
@@ -1223,5 +1224,205 @@ func TestSelectAutoRelayKeyKeepsExhaustedKeyWhenCreateFails(t *testing.T) {
 	}
 	if creds.RelayKeyTokenID != 21 || creds.RelayKey != want {
 		t.Fatalf("drained auto key was not kept as the last resort: %+v", creds)
+	}
+}
+
+// The failure this ranking exists to close, in the shape it actually shipped in: an auto key capped at a few cents, created after the account's unlimited "Auto" key, therefore heading the id-desc list. It is not Exhausted() — the gateway refuses a request whose pre-consume estimate exceeds remain_quota rather than debiting the balance below zero, so a capped key strands ABOVE zero and answers 403 "token quota is not enough" on every call while still passing ValidateUserToken. The launch preflight only invalidates the cache on a 401, so without this ranking the account has no way back.
+func TestResolveRelayKey_DefaultGroupPrefersUnlimitedOverNearlyDrainedAuto(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	srv := tokenListAndKeyServer(t,
+		[]map[string]interface{}{
+			{"id": 3620, "name": "capped", "status": TokenStatusEnabled, "group": "auto", "remain_quota": 2245},
+			{"id": 812, "name": "Auto", "status": TokenStatusEnabled, "group": "auto", "remain_quota": 0, "unlimited_quota": true},
+		},
+		map[int]string{3620: "sk-everyapi-capped-3620", 812: "sk-everyapi-auto-812"},
+	)
+	creds := &config.Credentials{APIBase: srv.URL, AccessToken: "tok", UserID: 1}
+	got, err := ResolveRelayKey(context.Background(), creds, "")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got != "sk-everyapi-auto-812" {
+		t.Errorf("key = %q, want the unlimited auto key over the newer nearly-drained one", got)
+	}
+	if creds.RelayKeyTokenID != 812 {
+		t.Errorf("creds.RelayKeyTokenID = %d, want 812", creds.RelayKeyTokenID)
+	}
+}
+
+// An account with no unlimited key at all still has a best answer: the capped key with the most left. Taking the list head would hand every launch to whichever key was created last, which is how a key with cents on it became the default in the first place.
+func TestResolveRelayKey_DefaultGroupPrefersLargestRemainingAmongCappedAutoKeys(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	srv := tokenListAndKeyServer(t,
+		[]map[string]interface{}{
+			{"id": 73, "name": "newest-nearly-drained", "status": TokenStatusEnabled, "group": "auto", "remain_quota": 2245},
+			{"id": 72, "name": "healthy", "status": TokenStatusEnabled, "group": "auto", "remain_quota": 9_000_000},
+			{"id": 71, "name": "middling", "status": TokenStatusEnabled, "group": "auto", "remain_quota": 500_000},
+		},
+		map[int]string{71: "sk-everyapi-mid-71", 72: "sk-everyapi-healthy-72", 73: "sk-everyapi-drained-73"},
+	)
+	creds := &config.Credentials{APIBase: srv.URL, AccessToken: "tok", UserID: 1}
+	got, err := ResolveRelayKey(context.Background(), creds, "")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got != "sk-everyapi-healthy-72" {
+		t.Errorf("key = %q, want the capped auto key with the most quota left", got)
+	}
+}
+
+// Ranking applies to the non-auto tier too — an account without an auto key relays on whatever ordinary key is picked here, and the same "newest wins" rule stranded it.
+func TestResolveRelayKey_DefaultGroupRanksOrdinaryFallbackOnHeadroom(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	srv := tokenListAndKeyServer(t,
+		[]map[string]interface{}{
+			{"id": 91, "name": "newest-nearly-drained", "status": TokenStatusEnabled, "group": "grp_a", "remain_quota": 10},
+			{"id": 90, "name": "unlimited", "status": TokenStatusEnabled, "group": "grp_b", "remain_quota": 0, "unlimited_quota": true},
+		},
+		map[int]string{90: "sk-everyapi-unlimited-90", 91: "sk-everyapi-drained-91"},
+	)
+	creds := &config.Credentials{APIBase: srv.URL, AccessToken: "tok", UserID: 1}
+	got, err := ResolveRelayKey(context.Background(), creds, "")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got != "sk-everyapi-unlimited-90" {
+		t.Errorf("key = %q, want the unlimited fallback key", got)
+	}
+}
+
+// An explicit --group must rank within that group rather than stop at its newest member, for the same reason the default arm does.
+func TestResolveRelayKey_ExplicitGroupRanksOnHeadroom(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	srv := tokenListAndKeyServer(t,
+		[]map[string]interface{}{
+			{"id": 82, "name": "newest-nearly-drained", "status": TokenStatusEnabled, "group": "grp_a", "remain_quota": 10},
+			{"id": 81, "name": "healthy", "status": TokenStatusEnabled, "group": "grp_a", "remain_quota": 5_000_000},
+			{"id": 80, "name": "other-group", "status": TokenStatusEnabled, "group": "grp_b", "unlimited_quota": true},
+		},
+		map[int]string{80: "sk-everyapi-other-80", 81: "sk-everyapi-healthy-81", 82: "sk-everyapi-drained-82"},
+	)
+	creds := &config.Credentials{APIBase: srv.URL, AccessToken: "tok", UserID: 1}
+	got, err := ResolveRelayKey(context.Background(), creds, "grp_a")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got != "sk-everyapi-healthy-81" {
+		t.Errorf("key = %q, want the healthiest key in the requested group", got)
+	}
+	// Group lookups are deliberately never cached — the default-group cache must not be poisoned by a per-run override.
+	if creds.RelayKey != "" {
+		t.Errorf("group resolve cached %q", creds.RelayKey)
+	}
+}
+
+// A gateway that omits remain_quota must not have an order invented for it: with the quota unknown on both sides the list order that shipped is the only defensible answer.
+func TestResolveRelayKey_AbsentQuotaFieldsKeepListOrder(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	srv := tokenListAndKeyServer(t,
+		[]map[string]interface{}{
+			{"id": 62, "name": "newest", "status": TokenStatusEnabled, "group": "auto"},
+			{"id": 61, "name": "older", "status": TokenStatusEnabled, "group": "auto"},
+		},
+		map[int]string{61: "sk-everyapi-older-61", 62: "sk-everyapi-newest-62"},
+	)
+	creds := &config.Credentials{APIBase: srv.URL, AccessToken: "tok", UserID: 1}
+	got, err := ResolveRelayKey(context.Background(), creds, "")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got != "sk-everyapi-newest-62" {
+		t.Errorf("key = %q, want the list head kept when the gateway does not report quota", got)
+	}
+}
+
+// SelectAutoRelayKey persists its pick and the default-group resolver serves that cache before it lists anything, so a capped auto key adopted here pins the account to a key that 403s every request. It must rank like the resolver does.
+func TestSelectAutoRelayKeyPrefersUnlimitedOverCappedAutoKey(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	const want = "sk-everyapi-auto-812"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/token/":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "data": map[string]interface{}{"items": []map[string]interface{}{
+				{"id": 3620, "name": "capped", "status": TokenStatusEnabled, "group": "auto", "remain_quota": 2245},
+				{"id": 812, "name": "Auto", "status": TokenStatusEnabled, "group": "auto", "remain_quota": 0, "unlimited_quota": true},
+			}}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/token/":
+			t.Error("created a key while the account already had an unlimited auto key")
+			http.Error(w, "unexpected create", http.StatusTeapot)
+		case r.URL.Path == "/api/token/812/key":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "data": map[string]interface{}{"key": want}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	creds := &config.Credentials{APIBase: srv.URL, AccessToken: "tok", UserID: 1}
+
+	created, err := SelectAutoRelayKey(context.Background(), creds)
+	if err != nil {
+		t.Fatalf("SelectAutoRelayKey: %v", err)
+	}
+	if created {
+		t.Error("reported a creation it did not make")
+	}
+	if creds.RelayKeyTokenID != 812 || creds.RelayKey != want {
+		t.Fatalf("capped auto key adopted over the unlimited one: %+v", creds)
+	}
+}
+
+// The second half of the repair: a credentials file written before this ranking holds the capped key it produced, and the default-group path returns that cache without ever listing tokens. The capped key never reaches remain <= 0, so it never 401s, so the preflight's cache invalidation never fires — one forced re-resolution is the only way such an install ever moves off it.
+func TestResolveRelayKey_UnrankedCacheIsReresolvedOnce(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	srv := tokenListAndKeyServer(t,
+		[]map[string]interface{}{
+			{"id": 3620, "name": "capped", "status": TokenStatusEnabled, "group": "auto", "remain_quota": 2245},
+			{"id": 812, "name": "Auto", "status": TokenStatusEnabled, "group": "auto", "remain_quota": 0, "unlimited_quota": true},
+		},
+		map[int]string{3620: "sk-everyapi-capped-3620", 812: "sk-everyapi-auto-812"},
+	)
+	creds := &config.Credentials{
+		APIBase:     srv.URL,
+		AccessToken: "tok",
+		UserID:      1,
+		// What a wedged install holds: stamped by the system-managed tiering, chosen before the ranking existed.
+		RelayKey:              "sk-everyapi-capped-3620",
+		RelayKeyTokenID:       3620,
+		RelayKeySystemChecked: true,
+	}
+
+	got, err := ResolveRelayKey(context.Background(), creds, "")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got != "sk-everyapi-auto-812" {
+		t.Errorf("key = %q, want the capped cache replaced by the unlimited key", got)
+	}
+	if !creds.RelayKeyQuotaChecked {
+		t.Error("re-resolution did not stamp the cache, so it would repeat on every launch")
+	}
+
+	// Second call must be a pure cache hit: a dead port makes any network call a failure.
+	creds.APIBase = "http://127.0.0.1:1"
+	again, err := ResolveRelayKey(context.Background(), creds, "")
+	if err != nil {
+		t.Fatalf("second resolve: %v", err)
+	}
+	if again != "sk-everyapi-auto-812" {
+		t.Errorf("second resolve = %q, want the stamped cache returned without a call", again)
+	}
+}
+
+// An explicit `everyapi token switch` is stamped on both axes: the user named the key, including when they deliberately named a capped one, and a re-resolution on the next launch would only discard that choice.
+func TestSelectRelayKeyStampsBothCacheChecks(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	const want = "sk-everyapi-chosen-77"
+	srv := tokenListAndKeyServer(t, nil, map[int]string{77: want})
+	creds := &config.Credentials{APIBase: srv.URL, AccessToken: "tok", UserID: 1}
+	if err := SelectRelayKey(context.Background(), creds, 77); err != nil {
+		t.Fatalf("SelectRelayKey: %v", err)
+	}
+	if !creds.RelayKeySystemChecked || !creds.RelayKeyQuotaChecked {
+		t.Fatalf("explicit choice left a cache the next launch would re-resolve: %+v", creds)
 	}
 }

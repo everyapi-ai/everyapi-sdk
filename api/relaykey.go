@@ -57,10 +57,10 @@ func ResolveRelayKey(ctx context.Context, creds *config.Credentials, group strin
 			}
 			return key, nil
 		}
-		// A cache written before the system-managed tiering existed may hold exactly the key that tiering demotes — see Credentials.RelayKeySystemChecked. Falling through re-resolves once and stamps the flag; every launch after that is a cache hit again.
+		// A cache written before the system-managed tiering existed may hold exactly the key that tiering demotes — see Credentials.RelayKeySystemChecked. A cache written before the headroom ranking may hold a key capped at a few cents, which the gateway answers with a 403 on every request while never returning the 401 that would invalidate the cache — see Credentials.RelayKeyQuotaChecked. Falling through re-resolves once and stamps both flags; every launch after that is a cache hit again.
 		//
 		// OAuth logins are exempt whatever the flag says: their key is minted for the login rather than chosen from the account's token list, so the tiering never applied to it. refreshRelayKeyIfNeeded returns ok=false both when no refresh is due and when one failed, so the OAuth check has to be made here rather than inferred from that call.
-		if creds.RelayKeySystemChecked || creds.OAuthClientID != "" {
+		if (creds.RelayKeySystemChecked && creds.RelayKeyQuotaChecked) || creds.OAuthClientID != "" {
 			return creds.RelayKey, nil
 		}
 		unstampedCache = creds.RelayKey
@@ -106,8 +106,11 @@ func ResolveRelayKey(ctx context.Context, creds *config.Credentials, group strin
 				rememberExhausted(tokens[i])
 				continue
 			}
-			pick = &tokens[i]
-			break
+			// Scans the whole group rather than stopping at the first match: the list is newest-first, and taking its head hands the group's traffic to whichever key was created last even when a sibling in the same group has far more quota left. Same ranking the default arm applies below.
+			if pick == nil || tokens[i].OutranksOnHeadroom(*pick) {
+				pick = &tokens[i]
+			}
+			continue
 		}
 		if tokens[i].SystemManaged {
 			rememberSystem(tokens[i])
@@ -118,13 +121,14 @@ func ResolveRelayKey(ctx context.Context, creds *config.Credentials, group strin
 			rememberExhausted(tokens[i])
 			continue
 		}
+		// Ranked on headroom rather than taken in list order, within each of the two tiers. The list is newest-first, so the unranked rule made the most recently created key the account default no matter how little it had left — and a capped key never becomes Exhausted() on its own, because the gateway refuses the request instead of debiting the balance past zero. A key capped at a few cents therefore displaced an unlimited "Auto" key and 403'd every request from then on, with no self-heal: the launch preflight only invalidates the cache on a 401, which a key stranded above zero never returns.
 		if tokens[i].Group == GroupAuto {
-			if autoPick == nil {
+			if autoPick == nil || tokens[i].OutranksOnHeadroom(*autoPick) {
 				autoPick = &tokens[i]
 			}
 			continue
 		}
-		if fallback == nil {
+		if fallback == nil || tokens[i].OutranksOnHeadroom(*fallback) {
 			fallback = &tokens[i]
 		}
 	}
@@ -166,9 +170,12 @@ func ResolveRelayKey(ctx context.Context, creds *config.Credentials, group strin
 			tokens = refreshed
 			for i := range tokens {
 				// Skip system keys here too: the account may already hold an EveryAPI-owned auto key, and matching it would hand back the narrow key we just created a replacement for. Exhausted keys are skipped for the same reason — the point of this branch is to end up on the unlimited key it just created, and the list is newest-first only until another client creates one.
+				//
+				// Ranked rather than first-match for that same reason: the key just created is unlimited, so headroom identifies it even when another client's key has since taken the head of the list.
 				if tokens[i].Status == TokenStatusEnabled && tokens[i].Group == GroupAuto && !tokens[i].SystemManaged && !tokens[i].Exhausted() {
-					pick = &tokens[i]
-					break
+					if pick == nil || tokens[i].OutranksOnHeadroom(*pick) {
+						pick = &tokens[i]
+					}
 				}
 			}
 		}
@@ -203,8 +210,9 @@ func ResolveRelayKey(ctx context.Context, creds *config.Credentials, group strin
 
 	creds.RelayKey = key
 	creds.RelayKeyTokenID = pick.ID
-	// This key came out of the tiering above, so the cache no longer needs re-resolving on the next launch.
+	// This key came out of the tiering and the headroom ranking above, so the cache no longer needs re-resolving on the next launch.
 	creds.RelayKeySystemChecked = true
+	creds.RelayKeyQuotaChecked = true
 	if saveErr := config.Save(creds); saveErr != nil {
 		return key, &ErrCacheSave{Err: saveErr}
 	}
@@ -265,8 +273,9 @@ func SelectRelayKey(ctx context.Context, creds *config.Credentials, tokenID int)
 	}
 	creds.RelayKey = key
 	creds.RelayKeyTokenID = tokenID
-	// An explicit choice needs no re-resolution: the user named this key, and re-running the tiering on the next launch would only discard what they picked.
+	// An explicit choice needs no re-resolution: the user named this key, and re-running the tiering or the headroom ranking on the next launch would only discard what they picked — including the deliberate choice of a capped key.
 	creds.RelayKeySystemChecked = true
+	creds.RelayKeyQuotaChecked = true
 	// A manual account-token selection leaves OAuth key rotation mode. Keeping old refresh material would silently replace the chosen key later.
 	creds.RefreshToken = ""
 	creds.RelayKeyExpiresAt = 0
@@ -293,6 +302,9 @@ func SelectAutoRelayKey(ctx context.Context, creds *config.Credentials) (bool, e
 	// The skipped key is REMEMBERED rather than discarded, because the create is not guaranteed to succeed: the personal key ceiling, the paid-account gate on POST /api/token/, or a network blip all leave the account exactly where it started. Erroring out then would turn a working-if-drained setup into a hard failure, where persisting the drained key still lets the launch preflight render the gateway's own out-of-quota 401 with its top-up link. ResolveRelayKey guards its own create with the same rule. Held by value: the post-create branch reassigns `tokens`, which would strand a pointer on the old backing array.
 	var exhaustedAuto TokenSummary
 	haveExhaustedAuto := false
+	// Ranked on headroom instead of returning the first eligible key, for the reason ResolveRelayKey ranks: the list is newest-first, so an auto key capped at a few cents would be persisted as the account default over an unlimited one created earlier — and this path's choice is the one the default-group resolver then serves straight from the cache, ahead of any list it would otherwise consult. Held by value: the post-create branch below reassigns `tokens`.
+	var bestAuto TokenSummary
+	haveBestAuto := false
 	for _, token := range tokens {
 		if token.Status != TokenStatusEnabled || token.Group != GroupAuto || token.SystemManaged {
 			continue
@@ -303,7 +315,12 @@ func SelectAutoRelayKey(ctx context.Context, creds *config.Credentials) (bool, e
 			}
 			continue
 		}
-		return false, SelectRelayKey(ctx, creds, token.ID)
+		if !haveBestAuto || token.OutranksOnHeadroom(bestAuto) {
+			bestAuto, haveBestAuto = token, true
+		}
+	}
+	if haveBestAuto {
+		return false, SelectRelayKey(ctx, creds, bestAuto.ID)
 	}
 	if err := client.CreateToken(ctx, TokenCreate{
 		Name:            "Auto",
@@ -322,10 +339,17 @@ func SelectAutoRelayKey(ctx context.Context, creds *config.Credentials) (bool, e
 	if err != nil {
 		return true, fmt.Errorf("look up created auto relay API key: %w", err)
 	}
+	// Ranked for the same reason the scan above is: the key just created is unlimited, so headroom identifies it even when another client has since put a capped auto key at the head of the list.
+	haveBestAuto = false
 	for _, token := range tokens {
 		if token.Status == TokenStatusEnabled && token.Group == GroupAuto && !token.SystemManaged && !token.Exhausted() {
-			return true, SelectRelayKey(ctx, creds, token.ID)
+			if !haveBestAuto || token.OutranksOnHeadroom(bestAuto) {
+				bestAuto, haveBestAuto = token, true
+			}
 		}
+	}
+	if haveBestAuto {
+		return true, SelectRelayKey(ctx, creds, bestAuto.ID)
 	}
 	return true, errors.New("created auto relay API key was not returned by the server")
 }

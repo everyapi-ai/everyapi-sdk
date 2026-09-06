@@ -38,6 +38,25 @@ func (t TokenSummary) Exhausted() bool {
 	return t.RemainQuota != nil && !t.UnlimitedQuota && *t.RemainQuota <= 0
 }
 
+// OutranksOnHeadroom reports whether t is the safer default relay key of the two on remaining quota alone: an unlimited key outranks a capped one, and between two capped keys the one with more quota left wins. Callers apply it only WITHIN a tier — it ranks equally eligible candidates, it does not promote a key past the system-managed or exhausted demotion.
+//
+// Why selection needs this at all: /api/token/ returns id desc, so without a ranking the newest enabled key becomes the account default, whatever it has left. A key capped at a few cents therefore hijacks the default from an unlimited one the moment it is created, and Exhausted() does not catch it — the gateway refuses a request whose PRE-CONSUME estimate exceeds remain_quota, so a capped key strands at a small POSITIVE balance and answers 403 "token quota is not enough" forever instead of ever reaching the <= 0 that would let it be demoted (or 401 the launch preflight into invalidating the cache).
+//
+// Returns false whenever either side's quota is unknown — an older gateway omits remain_quota (see the field comment), and reordering the list on a guess would be worse than the list order it replaced.
+func (t TokenSummary) OutranksOnHeadroom(other TokenSummary) bool {
+	if t.RemainQuota == nil || other.RemainQuota == nil {
+		return false
+	}
+	if t.UnlimitedQuota != other.UnlimitedQuota {
+		return t.UnlimitedQuota
+	}
+	if t.UnlimitedQuota {
+		// Neither has a ceiling, so there is nothing to rank on. Keeping the list order leaves the newest unlimited key as the default, which is what shipped.
+		return false
+	}
+	return *t.RemainQuota > *other.RemainQuota
+}
+
 // ListTokens returns all of the user's relay API tokens (management API, UserAuth — caller must have set WithUserID). It follows pagination because disabled historical tokens can fill earlier pages while an older enabled key remains selectable on a later page.
 func (c *Client) ListTokens(ctx context.Context) ([]TokenSummary, error) {
 	return c.listTokens(ctx, 0)

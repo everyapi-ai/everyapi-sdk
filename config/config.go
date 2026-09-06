@@ -86,6 +86,12 @@ type Credentials struct {
 	//
 	// False on every credentials file written before this field, which forces one re-resolution on the next launch; the field is set on the write-back below and the cache is honoured normally from then on. The cost is a single extra token-list call, once per install.
 	RelayKeySystemChecked bool `json:"relay_key_system_checked,omitempty"`
+	// RelayKeyQuotaChecked records that the cached RelayKey was chosen under the headroom ranking in api.ResolveRelayKey — unlimited keys first, then the largest remaining quota — rather than by the older rule that took the newest enabled key and only disqualified one already at zero.
+	//
+	// A second stamp is needed rather than reusing RelayKeySystemChecked: that flag is already true on every cache written since the system-managed tiering shipped, including the caches this ranking exists to repair. A limited key strands at a small POSITIVE balance (the atomic reserve refuses the request instead of debiting it below zero), so it never trips the `remain <= 0` rejection the launch preflight turns into a cache invalidation — without a one-shot re-resolution such an install stays pinned to an unusable key forever.
+	//
+	// False on every credentials file written before this field, which forces one re-resolution on the next launch; the field is set on the write-back and on an explicit `everyapi token switch`, and the cache is honoured normally from then on. The cost is a single extra token-list call, once per install.
+	RelayKeyQuotaChecked bool `json:"relay_key_quota_checked,omitempty"`
 	// RefreshToken renews an OAuth2-issued RelayKey before it expires (device-grant fallback only). Empty for the legacy flow, whose keys don't expire.
 	RefreshToken string `json:"refresh_token,omitempty"`
 	// RelayKeyExpiresAt is the RelayKey's expiry (unix seconds; 0 = unknown / non-expiring). Drives proactive refresh.

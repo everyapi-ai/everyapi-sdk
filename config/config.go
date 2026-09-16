@@ -106,6 +106,22 @@ type Credentials struct {
 	AvatarURL string `json:"avatar_url,omitempty"`
 }
 
+// SameAccount reports whether two credentials identify one EveryAPI account — the question behind "does this login replace that one, or sit beside it".
+//
+// Identity is the gateway plus the user id. The OAuth2 device-grant path records no user id at all (its access token IS the relay key and there is no management session), so for those the gateway plus the OAuth client stands in: two OAuth2 logins against the same gateway are indistinguishable on disk, and treating them as one account is the only option that does not accumulate a new one on every refresh.
+func (c *Credentials) SameAccount(other *Credentials) bool {
+	if c == nil || other == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimRight(c.APIBase, "/"), strings.TrimRight(other.APIBase, "/")) {
+		return false
+	}
+	if c.UserID > 0 || other.UserID > 0 {
+		return c.UserID == other.UserID
+	}
+	return c.OAuthClientID == other.OAuthClientID
+}
+
 // IsAdmin reports whether the credential holder can drive admin-gated endpoints. Backend uses role >= RoleAdminUser (10) as the threshold; we mirror that here. Returns false for empty/0 (legacy credentials).
 func (c *Credentials) IsAdmin() bool {
 	return c != nil && c.Role >= 10
@@ -147,11 +163,25 @@ func credentialsPath() (string, error) {
 }
 
 // Load reads credentials from disk. Returns ErrNoCredentials when the file doesn't exist — callers should special-case that to print a "run 'everyapi login' first" message rather than the raw error.
+//
+// When the process has been pinned to a specific account with SelectAccount (`everyapi --account other …`), this reads THAT account's file; otherwise it reads the active account's credentials.json. Every caller in the CLI goes through here, which is what makes the redirect total rather than a flag each command has to remember to honour.
 func Load() (*Credentials, error) {
+	if path := selectedPath(); path != "" {
+		return readCredentialsFile(path)
+	}
+	return loadCredentialsFromActive()
+}
+
+// loadCredentialsFromActive reads the active account's credentials.json, ignoring any per-process account selection. Use it for the account bookkeeping itself (listing, switching), where "the active account" is the subject rather than "the account this command is running as".
+func loadCredentialsFromActive() (*Credentials, error) {
 	path, err := credentialsPath()
 	if err != nil {
 		return nil, err
 	}
+	return readCredentialsFile(path)
+}
+
+func readCredentialsFile(path string) (*Credentials, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -176,55 +206,45 @@ func normalizeAPIBase(base string) string {
 }
 
 // Save writes credentials atomically (tmp + rename) at mode 0600. The atomic dance prevents a half-written file if the process is killed mid-write; mode 0600 keeps the token off prying eyes on shared machines (XDG_CONFIG_HOME is per-user already, but being explicit matches `gh auth` / `aws configure` conventions).
+//
+// Like Load, this honours a per-process SelectAccount pin: a command running as `--account other` writes its credential updates (a rotated relay key, a refreshed role) into that account's file, never into the active account's.
 func Save(c *Credentials) error {
-	dir, err := ConfigDir()
-	if err != nil {
-		return err
+	path := selectedPath()
+	if path == "" {
+		p, err := credentialsPath()
+		if err != nil {
+			return err
+		}
+		path = p
 	}
+	return saveCredentialsTo(path, c)
+}
+
+// saveCredentialsTo writes one credential file atomically at mode 0600, creating its directory if needed.
+func saveCredentialsTo(path string, c *Credentials) error {
+	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("mkdir config: %w", err)
 	}
-	// Reap temp files orphaned by a previous process hard-killed between the write and the rename below — each Save uses a unique temp name, so nothing else ever overwrites or removes them and they'd otherwise accumulate forever. Best-effort and age-guarded (see sweepStaleTempFiles); runs before our own write and again after the rename succeeds.
-	sweepStaleTempFiles(dir)
-	path := filepath.Join(dir, "credentials.json")
+	base := filepath.Base(path)
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal credentials: %w", err)
 	}
-	// Unique temp name (not a fixed "credentials.json.tmp") so two everyapi processes writing credentials concurrently can't share one temp file and rename a half-written one over the real credentials.
-	f, err := os.CreateTemp(dir, "credentials.json.tmp-*")
-	if err != nil {
-		return fmt.Errorf("create temp credentials: %w", err)
+	if err := writeFileAtomic(dir, base, data, 0o600); err != nil {
+		return err
 	}
-	tmp := f.Name()
-	if _, err := f.Write(data); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		return fmt.Errorf("write credentials: %w", err)
-	}
-	if err := f.Chmod(0o600); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		return fmt.Errorf("chmod credentials: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("close temp credentials: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("rename credentials: %w", err)
-	}
-	sweepStaleTempFiles(dir)
+	// Reap temp files orphaned by a previous process hard-killed between its write and its rename — each write uses a unique temp name, so nothing else ever overwrites or removes them and they'd otherwise accumulate forever. writeFileAtomic already sweeps before its own write; this second pass runs after the rename so a temp that aged past the floor while we were writing still gets collected. Best-effort and age-guarded (see sweepStaleTempsFor).
+	sweepStaleTempsFor(dir, base)
 	return nil
 }
 
-// staleTempAge is how old a leftover credentials.json.tmp-* file must be before sweepStaleTempFiles reaps it. A real Save's temp lives for microseconds (create → write → chmod → rename), so anything this old is an orphan from a process killed between write and rename. The age floor also guarantees we never delete a *concurrent* Save's in-flight temp (always brand new), preserving the unique-temp-name concurrency safety the rename dance relies on.
+// staleTempAge is how old a leftover <name>.tmp-* file must be before sweepStaleTempsFor reaps it. A real Save's temp lives for microseconds (create → write → chmod → rename), so anything this old is an orphan from a process killed between write and rename. The age floor also guarantees we never delete a *concurrent* Save's in-flight temp (always brand new), preserving the unique-temp-name concurrency safety the rename dance relies on.
 const staleTempAge = 5 * time.Minute
 
-// sweepStaleTempFiles best-effort removes orphaned credentials.json.tmp-* files in dir. Every error is ignored: a sweep failure must never fail the Save it runs alongside — these files are pure litter, not correctness-critical, and only files older than staleTempAge are touched so a concurrent writer's fresh temp is left alone.
-func sweepStaleTempFiles(dir string) {
-	matches, err := filepath.Glob(filepath.Join(dir, "credentials.json.tmp-*"))
+// sweepStaleTempsFor best-effort removes orphaned <base>.tmp-* files in dir. Every error is ignored: a sweep failure must never fail the Save it runs alongside — these files are pure litter, not correctness-critical, and only files older than staleTempAge are touched so a concurrent writer's fresh temp is left alone.
+func sweepStaleTempsFor(dir, base string) {
+	matches, err := filepath.Glob(filepath.Join(dir, base+".tmp-*"))
 	if err != nil {
 		return
 	}
@@ -240,13 +260,17 @@ func sweepStaleTempFiles(dir string) {
 	}
 }
 
-// Delete removes the credentials file. Returns nil on missing file (logout is idempotent — calling it twice shouldn't error).
+// Delete removes the credentials file. Returns nil on missing file (logout is idempotent — calling it twice shouldn't error). Honours a per-process SelectAccount pin, so `everyapi --account other auth logout` signs out that account and leaves the active one alone.
 func Delete() error {
-	path, err := credentialsPath()
-	if err != nil {
-		return err
+	path := selectedPath()
+	if path == "" {
+		p, err := credentialsPath()
+		if err != nil {
+			return err
+		}
+		path = p
 	}
-	err = os.Remove(path)
+	err := os.Remove(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove credentials: %w", err)
 	}

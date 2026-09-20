@@ -66,6 +66,29 @@ func (c *Client) UpdateNotifySetting(ctx context.Context, req NotifySettingReque
 	return nil
 }
 
+// SetArtifactReports switches the account-level artifact delivery standard on or off (PUT /api/user/self).
+//
+// A different endpoint from UpdateNotifySetting above, and deliberately so: PUT /api/user/setting rebuilds
+// the whole notification blob and requires a channel plus a threshold on every write, so routing a single
+// unrelated boolean through it would mean reconstructing the user's notification config to change a switch.
+// /api/user/self branches per setting key and touches nothing else.
+//
+// `artifact_reports` is the positive form — false means stop publishing. The backend stores the negation;
+// see its dto.UserSetting.ArtifactReportsOff for why.
+func (c *Client) SetArtifactReports(ctx context.Context, enabled bool) error {
+	var env struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	}
+	if err := c.do(ctx, "PUT", "/api/user/self", map[string]bool{"artifact_reports": enabled}, &env); err != nil {
+		return err
+	}
+	if !env.Success {
+		return errors.New(env.Message)
+	}
+	return nil
+}
+
 // TestNotification fires a one-shot test message through the configured channel (POST /api/user/setting/test). The backend surfaces a delivery error verbatim, so a failed channel config shows up here.
 func (c *Client) TestNotification(ctx context.Context) error {
 	var env struct {

@@ -23,6 +23,10 @@ type SelfData struct {
 	Role int `json:"role"`
 	// Setting is the raw user-setting JSON blob (notify channel + quota-warning threshold + UI prefs). Left as a string to keep SelfData decoupled from the full setting schema; GetNotifySetting parses out the notification subset on demand.
 	Setting string `json:"setting"`
+	// ArtifactReports — account-level switch for the artifact delivery standard `everyapi use` injects into launched agents. Read from the named response field rather than parsed out of Setting on purpose: the blob stores the negated `artifact_reports_off`, and this key is the backend's own positive rendering of it, so nothing on this side has to know the storage polarity.
+	//
+	// Pointer because absent and false must not collapse. A CLI pointed at a deployment older than the field gets nil, which means "this backend has no opinion" and has to leave the cached value alone — decoding it as false would silently switch reports off for everyone on an older gateway.
+	ArtifactReports *bool `json:"artifact_reports"`
 }
 
 func (c *Client) GetSelf(ctx context.Context) (*SelfData, error) {

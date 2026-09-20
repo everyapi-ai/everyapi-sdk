@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // TestSaveLoadRoundTrip writes credentials, reads them back, and confirms every field survives the JSON round-trip — guards against future schema renames silently dropping fields.
@@ -195,6 +196,112 @@ func TestSettingsLaunchPreferencesPersist(t *testing.T) {
 	}
 	if got.TerminalMode != "tmux" {
 		t.Fatalf("TerminalMode = %q, want tmux", got.TerminalMode)
+	}
+}
+
+// The tri-state is the whole design: the artifact standard shipped on every launch before this
+// setting existed, so "no opinion on disk" and "explicitly on" have to behave identically, and only
+// an explicit false may change a launch. A settings.json written before the field existed decodes
+// to nil and must keep its old behaviour.
+func TestArtifactReportsEnabledDefaultsToOn(t *testing.T) {
+	enabled := true
+	disabled := false
+	for _, tc := range []struct {
+		name     string
+		settings *Settings
+		want     bool
+	}{
+		{"nil receiver", nil, true},
+		{"unset", &Settings{}, true},
+		{"explicit true", &Settings{ArtifactReports: &enabled}, true},
+		{"explicit false", &Settings{ArtifactReports: &disabled}, false},
+	} {
+		if got := tc.settings.ArtifactReportsEnabled(); got != tc.want {
+			t.Errorf("%s: ArtifactReportsEnabled() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestArtifactReportsRoundTripThroughDisk(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	disabled := false
+	if err := SaveSettings(&Settings{ArtifactReports: &disabled, ArtifactReportsAccountID: 7}); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+	got, err := LoadSettings()
+	if err != nil {
+		t.Fatalf("LoadSettings: %v", err)
+	}
+	if got.ArtifactReports == nil || *got.ArtifactReports {
+		t.Fatalf("ArtifactReports = %v, want explicit false", got.ArtifactReports)
+	}
+	if got.ArtifactReportsEnabled() {
+		t.Error("a persisted false did not survive as disabled")
+	}
+	if !got.ArtifactReportsCachedFor(7) {
+		t.Error("the account the cache belongs to did not survive the round trip")
+	}
+}
+
+// The cache is per-account, not per-machine: settings.json survives `everyapi auth accounts switch`, so a
+// value with no owner would be applied to whoever signs in next.
+func TestArtifactReportsCacheIsScopedToItsAccount(t *testing.T) {
+	now := time.Now()
+	settings := &Settings{}
+	settings.SetArtifactReportsCache(false, 7, now)
+
+	if !settings.ArtifactReportsCachedFor(7) {
+		t.Error("the cache does not belong to the account that wrote it")
+	}
+	if settings.ArtifactReportsCachedFor(8) {
+		t.Error("the cache claims to belong to an account that never wrote it")
+	}
+	if !settings.ArtifactReportsFresh(now, 7) {
+		t.Error("a just-written cache is not fresh for its own account")
+	}
+	if settings.ArtifactReportsFresh(now, 8) {
+		t.Error("another account's cache counted as fresh, so no refresh would be attempted")
+	}
+}
+
+func TestArtifactReportsFreshness(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name     string
+		settings func() *Settings
+		want     bool
+	}{
+		{"never cached", func() *Settings { return &Settings{} }, false},
+		{"just written", func() *Settings {
+			s := &Settings{}
+			s.SetArtifactReportsCache(true, 7, now)
+			return s
+		}, true},
+		{"inside the TTL", func() *Settings {
+			s := &Settings{}
+			s.SetArtifactReportsCache(true, 7, now.Add(-ArtifactReportsCacheTTL/2))
+			return s
+		}, true},
+		{"past the TTL", func() *Settings {
+			s := &Settings{}
+			s.SetArtifactReportsCache(true, 7, now.Add(-2*ArtifactReportsCacheTTL))
+			return s
+		}, false},
+		// A clock that jumped, or a settings.json copied off another machine, must not pin the switch to a
+		// value that can never be re-checked.
+		{"stamped in the future", func() *Settings {
+			s := &Settings{}
+			s.SetArtifactReportsCache(true, 7, now.Add(time.Hour))
+			return s
+		}, false},
+		{"value with no timestamp", func() *Settings {
+			enabled := true
+			return &Settings{ArtifactReports: &enabled, ArtifactReportsAccountID: 7}
+		}, false},
+	} {
+		if got := tc.settings().ArtifactReportsFresh(now, 7); got != tc.want {
+			t.Errorf("%s: fresh = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
 

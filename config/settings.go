@@ -44,24 +44,24 @@ type Settings struct {
 	// ToolReasoningLevels remembers the reasoning/thinking level each tool was last launched with, keyed by tool name. Same reason as ToolModels: the level a user sets inside codex lands in its config.toml, and that file lives in the process-scoped CODEX_HOME `everyapi use` deletes on exit, so the client cannot remember it on its own. Values are the level names the launched tool understands ("low", "medium", "high", "xhigh", "max", "ultra" for codex; pi adds "off"/"minimal"), because the tools do not share one scale — a level is only ever read back by the tool that wrote it.
 	ToolReasoningLevels map[string]string `json:"tool_reasoning_levels,omitempty"`
 
-	// ArtifactReports is the CACHED account-level switch for the EveryAPI Artifact delivery standard — the instruction to publish a completion report through `everyapi artifacts share` at the end of a task. Nil means nothing has been cached yet, which reads as on: that is the behaviour every launch had before the switch existed.
+	// ArtifactReports is the last known account-level switch for the EveryAPI Artifact delivery standard. Nil means nothing has been cached yet, which reads as on: that is the behaviour every launch had before the switch existed.
 	//
-	// The account owns the value (the dashboard's artifacts page toggles it, and so does `everyapi settings set artifact_reports`, which writes through to the account). This file only remembers what the account last said, so a launch still resolves the switch on a plane or behind a firewall instead of guessing. ArtifactReportsSyncedAt below is what stops every launch paying for a round-trip to re-learn it.
+	// The account owns the value (the dashboard's artifacts page toggles it, and so does `everyapi settings set artifact_reports`, which writes through to the account). This file is only the offline fallback: the CLI reads the live value before an automatic publication, and only an exact successful `true` authorizes one.
 	//
-	// Turning it off removes the instruction, not the feature: `everyapi artifacts share` keeps working, and an agent still publishes when the user asks it to.
+	// Turning it off disables automatic publication, not the feature: `everyapi artifacts share` keeps working, and an agent still publishes when the user asks it to.
 	ArtifactReports *bool `json:"artifact_reports,omitempty"`
 
 	// ArtifactReportsAccountID is the account ArtifactReports was read from. Zero means unknown.
 	//
 	// This file is per-machine, but `everyapi auth accounts switch` swaps which account the machine is
 	// signed in as without touching it — so without this field the cache is a value with no owner. Switch
-	// from an account that turned reports off to one that leaves them on, and every launch inside the TTL
-	// would honour the wrong account's answer. A cached switch only applies to the account it came from.
+	// from an account that turned reports off to one that leaves them on, and an offline fallback could
+	// honour the wrong account's answer. A cached switch only applies to the account it came from.
 	ArtifactReportsAccountID int `json:"artifact_reports_account_id,omitempty"`
 
-	// ArtifactReportsSyncedAt is when ArtifactReports was last read from the account, as a Unix second. Zero means never.
+	// ArtifactReportsSyncedAt is when ArtifactReports was last read from the account, as a Unix second. Zero means never. It remains in the persisted schema for compatibility and diagnostics; the CLI no longer treats a recent timestamp as permission to skip the live completion-time read.
 	//
-	// The cache needs an age because the launch path has to choose between two bad options without one: refresh every launch, which puts a network round-trip in front of `everyapi use` on a path that works offline today, or never refresh, which means a dashboard toggle reaches a machine only when something else happens to sync it. A TTL bounds the staleness instead — see ArtifactReportsFresh.
+	// Downstream SDK users may still use ArtifactReportsFresh for non-authorizing displays; it must not gate an automatic report.
 	ArtifactReportsSyncedAt int64 `json:"artifact_reports_synced_at,omitempty"`
 
 	// ClaudeLongContext controls whether an `everyapi use claude` launch boots an Opus model with Claude Code's `[1m]` marker, which is the only thing that makes the client request Anthropic's context-1m-2025-08-07 beta. Nil (unset) means on, matching what Claude Code's own Default resolves to for Opus outside the gateway.
@@ -70,15 +70,14 @@ type Settings struct {
 	ClaudeLongContext *bool `json:"claude_long_context,omitempty"`
 }
 
-// ArtifactReportsCacheTTL is how long a cached account switch is trusted before a launch tries to refresh it.
+// ArtifactReportsCacheTTL is the legacy freshness window exposed for downstream clients that use
+// ArtifactReportsFresh for non-authorizing displays. The EveryAPI CLI itself always checks the live
+// account value before automatic publication.
 //
-// Ten minutes is a deliberate middle: long enough that a burst of launches costs one round-trip rather than
-// one each, short enough that toggling the dashboard on a laptop reaches the desktop in the time it takes to
-// walk over to it. The refresh is best-effort either way — it never blocks or fails a launch — so the cost of
-// this being too short is a request, and the cost of it being too long is a stale switch, not a broken one.
+// Deprecated: do not use cache freshness to authorize an automatic artifact report.
 const ArtifactReportsCacheTTL = 10 * time.Minute
 
-// ArtifactReportsEnabled reports whether a launch should carry the artifact delivery standard. No cached value means enabled: the standard shipped on, and a machine that has never reached the account must not invent an opt-out nobody asked for.
+// ArtifactReportsEnabled reports the last known account value. No cached value means enabled, preserving the default that shipped before the switch. This is an offline/display fallback; callers authorizing automatic publication must perform a live read.
 func (s *Settings) ArtifactReportsEnabled() bool {
 	if s == nil || s.ArtifactReports == nil {
 		return true
@@ -92,12 +91,14 @@ func (s *Settings) ArtifactReportsCachedFor(accountID int) bool {
 	return s != nil && s.ArtifactReports != nil && s.ArtifactReportsAccountID == accountID
 }
 
-// ArtifactReportsFresh reports whether the cached switch is recent enough, and from the right account, to
-// use without asking again.
+// ArtifactReportsFresh reports whether the cached switch is within the legacy freshness window and belongs
+// to the right account.
 //
 // A cache with no value is never fresh, so the first launch after login does resolve the real setting. A
 // timestamp in the future is treated as stale rather than trusted forever — a clock that jumped, or a file
 // copied from another machine, must not pin this to a value that can no longer be corrected.
+//
+// Deprecated: automatic report authorization must use the live account value.
 func (s *Settings) ArtifactReportsFresh(now time.Time, accountID int) bool {
 	if !s.ArtifactReportsCachedFor(accountID) || s.ArtifactReportsSyncedAt <= 0 {
 		return false

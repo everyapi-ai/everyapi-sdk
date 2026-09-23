@@ -633,15 +633,16 @@ func decodeBody(encoding string, data []byte) ([]byte, error) {
 	return out, nil
 }
 
-// wrapDecoder returns a streaming decoder for the given Content-Encoding. "deflate" is ambiguous in the wild (RFC 7230 says zlib-wrapped, many servers send raw); we try zlib and fall back to raw flate.
+// wrapDecoder returns a streaming decoder for the given Content-Encoding. "deflate" is ambiguous in the wild (RFC 7230 says zlib-wrapped, many servers send raw), so we have to sniff the framing before picking a decoder.
 func wrapDecoder(encoding string, r io.Reader) (io.ReadCloser, error) {
 	switch encoding {
 	case "gzip", "x-gzip":
 		return gzip.NewReader(r)
 	case "deflate":
+		// Peek the framing header — never Read it. zlib.NewReader consumes its two-byte CMF/FLG header from the underlying reader even on the path where it rejects the stream, so the old "try zlib, fall back to flate on error" shape handed flate a reader already advanced two bytes into a raw-deflate stream. That mangles the body from its very first byte, and the dangerous outcome is not the loud one: a short body often still inflates into plausible-looking bytes (`{"k":"v"}` came back as `k":"v"}`), the detectors find nothing in the garbage, and the original encoded body is forwarded upstream with its secrets intact. bufio.Reader.Peek leaves the bytes in the buffer so whichever decoder we choose starts at offset 0. A zlib header is two bytes where the low nibble of CMF is compression method 8 (deflate) and the big-endian pair is a multiple of 31; anything else is raw flate. Checking both conditions matters because a raw-deflate stream can easily begin with a byte whose low nibble is 8.
 		buf := bufio.NewReader(r)
-		if zr, err := zlib.NewReader(buf); err == nil {
-			return zr, nil
+		if head, perr := buf.Peek(2); perr == nil && head[0]&0x0f == 8 && (uint16(head[0])<<8|uint16(head[1]))%31 == 0 {
+			return zlib.NewReader(buf)
 		}
 		return flate.NewReader(buf), nil
 	default:

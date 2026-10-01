@@ -19,9 +19,11 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -438,7 +440,44 @@ func (s *Server) roundTrip(in *http.Request, officialHost string, action Action)
 		stripClientQueryCredentials(out.URL)
 		out.Header.Set("Authorization", "Bearer "+s.token)
 	}
+	var replayBody []byte
+	replayable := action == ActionRelay && out.Body != nil && out.ContentLength != 0
+	if replayable {
+		const maxReplayBody = 64 << 20
+		body, bodyErr := io.ReadAll(io.LimitReader(out.Body, maxReplayBody+1))
+		_ = out.Body.Close()
+		if bodyErr != nil || int64(len(body)) > maxReplayBody {
+			// The body has been consumed and cannot be safely forwarded. Fail
+			// closed rather than sending a truncated or partially read request.
+			return nil
+		}
+		replayBody = body
+		out.Body = io.NopCloser(bytes.NewReader(body))
+		out.ContentLength = int64(len(body))
+	}
+	var wroteRequest atomic.Bool
+	trace := &httptrace.ClientTrace{WroteRequest: func(httptrace.WroteRequestInfo) { wroteRequest.Store(true) }}
+	out = out.WithContext(httptrace.WithClientTrace(out.Context(), trace))
 	resp, err := s.transport.RoundTrip(out)
+	// A network/VPN change can leave the shared keep-alive connection in the
+	// transport unusable. The first request after that change then fails before
+	// any response headers arrive and Claude turns the connector's 502 into the
+	// opaque "API ERROR". At this point no upstream response was received, so
+	// replaying the request is safe only after the connector bounded and
+	// captured its complete request body and the transport reported that it
+	// never wrote the first copy.
+	// Close idle connections before the retry so the transport resolves the new
+	// route instead of selecting the dead socket again. Pass-through traffic is
+	// deliberately not retried: it is not owned by EveryAPI and may be a
+	// non-idempotent call.
+	if err != nil && replayable && !wroteRequest.Load() && !requestContextDone(out) {
+		closer, canRetry := s.transport.(interface{ CloseIdleConnections() })
+		if canRetry {
+			closer.CloseIdleConnections()
+			out.Body = io.NopCloser(bytes.NewReader(replayBody))
+			resp, err = s.transport.RoundTrip(out)
+		}
+	}
 	if err != nil {
 		s.logger.Printf("connector: %s %s via %s failed: %v", in.Method, in.URL.Path, action, err)
 		_ = in.Body.Close()
@@ -451,6 +490,18 @@ func (s *Server) roundTrip(in *http.Request, officialHost string, action Action)
 	stripGatewayFingerprintHeaders(resp.Header)
 	normalizeResponseForHTTP11(resp, in.Method)
 	return resp
+}
+
+func requestContextDone(req *http.Request) bool {
+	if req == nil || req.Context() == nil {
+		return false
+	}
+	select {
+	case <-req.Context().Done():
+		return true
+	default:
+		return false
+	}
 }
 
 const maxRelayedErrorDrainBytes = 64 << 10

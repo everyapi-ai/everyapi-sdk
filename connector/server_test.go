@@ -9,10 +9,12 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"net/url"
 	"strings"
 	"sync"
@@ -498,6 +500,131 @@ func TestDialTunnelFallsBackToDirectForSocksProxy(t *testing.T) {
 	_ = conn.Close()
 }
 
+func TestServerRetriesReplayableRelayAfterTransportFailure(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewRegistry([]Target{{
+		Name:              "test",
+		Hosts:             []string{"localhost"},
+		Routes:            []Route{{Method: http.MethodPost, Exact: "/v1/messages", Action: ActionRelay}},
+		SensitivePrefixes: []string{"/v1/messages"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var attempts atomic.Int64
+	transport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		if attempts.Add(1) == 1 {
+			return nil, errors.New("stale connection after network change")
+		}
+		body, readErr := io.ReadAll(req.Body)
+		if readErr != nil || string(body) != `{}` {
+			return nil, fmt.Errorf("replayed body = %q (%v)", body, readErr)
+		}
+		return &http.Response{
+			StatusCode:    http.StatusOK,
+			Status:        "200 OK",
+			Proto:         "HTTP/1.1",
+			ProtoMajor:    1,
+			ProtoMinor:    1,
+			Header:        make(http.Header),
+			Body:          io.NopCloser(strings.NewReader(`{"ok":true}`)),
+			ContentLength: 11,
+			Request:       req,
+		}, nil
+	})
+	server, err := New(Config{UpstreamBase: "https://relay.invalid", RelayToken: "relay", Registry: registry, Transport: transport})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxyURL, roots, stop := serveTestConnector(t, server)
+	defer stop()
+
+	resp, err := proxyClient(proxyURL, roots).Post("https://localhost/v1/messages", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatalf("client.Post: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || string(body) != `{"ok":true}` {
+		t.Fatalf("response = %d %q", resp.StatusCode, body)
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("transport attempts = %d, want one retry", got)
+	}
+}
+
+func TestServerDoesNotRetryAfterTransportWroteRequest(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewRegistry([]Target{{
+		Name: "test", Hosts: []string{"localhost"},
+		Routes:            []Route{{Method: http.MethodPost, Exact: "/v1/messages", Action: ActionRelay}},
+		SensitivePrefixes: []string{"/v1/messages"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var attempts atomic.Int64
+	transport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		attempts.Add(1)
+		if trace := httptrace.ContextClientTrace(req.Context()); trace != nil && trace.WroteRequest != nil {
+			trace.WroteRequest(httptrace.WroteRequestInfo{})
+		}
+		return nil, errors.New("connection lost after request write")
+	})
+	server, err := New(Config{UpstreamBase: "https://relay.invalid", RelayToken: "relay", Registry: registry, Transport: transport})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxyURL, roots, stop := serveTestConnector(t, server)
+	defer stop()
+
+	resp, err := proxyClient(proxyURL, roots).Post("https://localhost/v1/messages", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatalf("client.Post: %v", err)
+	}
+	defer resp.Body.Close()
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("transport attempts = %d, want no retry after write", got)
+	}
+}
+
+func TestServerDoesNotBufferOversizedRelayBody(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewRegistry([]Target{{
+		Name:              "test",
+		Hosts:             []string{"localhost"},
+		Routes:            []Route{{Method: http.MethodPost, Exact: "/v1/messages", Action: ActionRelay}},
+		SensitivePrefixes: []string{"/v1/messages"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var attempts atomic.Int64
+	transport := roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		attempts.Add(1)
+		return nil, errors.New("must not be called for oversized body")
+	})
+	server, err := New(Config{UpstreamBase: "https://relay.invalid", RelayToken: "relay", Registry: registry, Transport: transport})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxyURL, roots, stop := serveTestConnector(t, server)
+	defer stop()
+
+	body := strings.Repeat("x", (64<<20)+1)
+	resp, err := proxyClient(proxyURL, roots).Post("https://localhost/v1/messages", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("client.Post: %v", err)
+	}
+	defer resp.Body.Close()
+	if got := attempts.Load(); got != 0 {
+		t.Fatalf("transport attempts = %d, want no attempt", got)
+	}
+}
+
 func TestServerDoesNotFallBackToOfficialOriginWhenRelayFails(t *testing.T) {
 	t.Parallel()
 
@@ -511,7 +638,7 @@ func TestServerDoesNotFallBackToOfficialOriginWhenRelayFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	var transportRequests atomic.Int64
-	transport := roundTripperFunc(func(*http.Request) (*http.Response, error) {
+	transport := noRetryRoundTripper(func(*http.Request) (*http.Response, error) {
 		transportRequests.Add(1)
 		return nil, errors.New("relay unavailable")
 	})
@@ -949,9 +1076,15 @@ func serveTestConnector(t *testing.T, server *Server) (proxyURL string, roots *x
 
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
+type noRetryRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f noRetryRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
 func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
+
+func (f roundTripperFunc) CloseIdleConnections() {}
 
 func proxyClient(proxyURL string, roots *x509.CertPool) *http.Client {
 	proxy, _ := url.Parse(proxyURL)

@@ -79,6 +79,19 @@ func TestPollUntilDone_Denied(t *testing.T) {
 	}
 }
 
+func TestDeviceAuthPoll_MapsForbiddenRegionRefusal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, `{"success":false,"message":"Access from mainland China IP addresses is not currently supported"}`)
+	}))
+	defer srv.Close()
+
+	_, err := New(srv.URL, "").DeviceAuthPoll(context.Background(), "dev-code")
+	if !errors.Is(err, ErrDeviceAuthRegionBlocked) {
+		t.Fatalf("want ErrDeviceAuthRegionBlocked, got %v", err)
+	}
+}
+
 // TestPollUntilDone_SlowDown verifies the interval-bump path. The server returns slow_down once, then authorized. We don't measure wall-clock interval growth (flaky); we just confirm the loop terminates on the authorized reply after the slow_down step.
 func TestPollUntilDone_SlowDown(t *testing.T) {
 	var calls int32

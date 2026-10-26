@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"time"
 )
 
@@ -56,6 +57,12 @@ var ErrDeviceAuthExpired = errors.New("device authorization expired")
 // ErrDeviceAuthDenied is returned when the user explicitly denies on the web confirmation page.
 var ErrDeviceAuthDenied = errors.New("device authorization denied")
 
+// ErrDeviceAuthRegionBlocked is returned when the gateway refuses to mint a
+// device credential for a mainland-China IP. The browser confirmation can
+// still complete before the polling request is rejected, so this needs its
+// own terminal state instead of looking like a transient gateway outage.
+var ErrDeviceAuthRegionBlocked = errors.New("device authorization is unavailable from mainland China")
+
 // pollTransientRetryBudget caps how many consecutive transport-level errors PollUntilDone will absorb before giving up. Three matches the worst-case browser flakiness (DNS retry + reconnect + reissue) without masking a permanent backend outage indefinitely.
 const pollTransientRetryBudget = 3
 
@@ -75,6 +82,10 @@ func (c *Client) DeviceAuthPoll(ctx context.Context, deviceCode string) (*Device
 	}
 	body := map[string]string{"device_code": deviceCode}
 	if err := c.do(ctx, "POST", "/api/cli/device-auth-poll", body, &env); err != nil {
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusForbidden {
+			return nil, ErrDeviceAuthRegionBlocked
+		}
 		return nil, err
 	}
 	if !env.Success {

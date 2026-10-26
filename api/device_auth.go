@@ -131,7 +131,7 @@ func (c *Client) PollUntilDone(ctx context.Context, deviceCode string, initialIn
 		res, err := c.DeviceAuthPoll(ctx, deviceCode)
 		if err != nil {
 			// A server-side error is definitive (the server told us something — bad request, gone, etc.); surface it.
-			if errors.As(err, new(*APIError)) {
+			if errors.Is(err, ErrDeviceAuthRegionBlocked) || errors.As(err, new(*APIError)) {
 				return nil, err
 			}
 			// Network-level error — try again unless we've burnt the budget. The context cancellation case is handled above at the top of the loop, so this only ever retries transient transport failures.

@@ -92,6 +92,31 @@ func TestDeviceAuthPoll_MapsForbiddenRegionRefusal(t *testing.T) {
 	}
 }
 
+func TestPollUntilDone_RegionRefusalIsNotRetriedAsExpired(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, `{"success":false,"message":"Access from mainland China IP addresses is not currently supported"}`)
+			return
+		}
+		// Older gateways delete the grant on refusal. A retry hides the actual
+		// error behind an expiry even though browser approval just succeeded.
+		_, _ = io.WriteString(w, `{"success":true,"data":{"status":"expired"}}`)
+	}))
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := New(srv.URL, "").PollUntilDone(ctx, "dev-code", 1)
+	if !errors.Is(err, ErrDeviceAuthRegionBlocked) {
+		t.Fatalf("want ErrDeviceAuthRegionBlocked, got %v", err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("region refusal must be terminal; got %d polls", got)
+	}
+}
+
 // TestPollUntilDone_SlowDown verifies the interval-bump path. The server returns slow_down once, then authorized. We don't measure wall-clock interval growth (flaky); we just confirm the loop terminates on the authorized reply after the slow_down step.
 func TestPollUntilDone_SlowDown(t *testing.T) {
 	var calls int32

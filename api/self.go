@@ -79,6 +79,7 @@ type RelayModel struct {
 	OwnedBy                string
 	SupportedEndpointTypes []string
 	ChatCompletionsBridge  bool
+	ClaudeMessagesBridge   bool
 	ContextWindow          int
 	MaxOutput              int
 	// SupportsThinking reports that the gateway has a verified upstream shape for this model's `reasoning_effort` / `reasoning` request fields. False means unknown, NOT "definitely unsupported" — the gateway's coverage is incremental — so a caller offering a reasoning-level control should show it only where this is true rather than treat the absence as a denial.
@@ -101,6 +102,7 @@ func (c *Client) GetRelayModelDirectory(ctx context.Context) (*RelayModelDirecto
 			OwnedBy                string   `json:"owned_by"`
 			SupportedEndpointTypes []string `json:"supported_endpoint_types"`
 			ChatCompletionsBridge  bool     `json:"chat_completions_bridge"`
+			ClaudeMessagesBridge   bool     `json:"claude_messages_bridge"`
 			ContextWindow          int      `json:"context_window"`
 			MaxOutput              int      `json:"max_output"`
 			SupportsThinking       bool     `json:"supports_thinking"`
@@ -119,6 +121,7 @@ func (c *Client) GetRelayModelDirectory(ctx context.Context) (*RelayModelDirecto
 				OwnedBy:                m.OwnedBy,
 				SupportedEndpointTypes: m.SupportedEndpointTypes,
 				ChatCompletionsBridge:  m.ChatCompletionsBridge,
+				ClaudeMessagesBridge:   m.ClaudeMessagesBridge,
 				ContextWindow:          m.ContextWindow,
 				MaxOutput:              m.MaxOutput,
 				SupportsThinking:       m.SupportsThinking,

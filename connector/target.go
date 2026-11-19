@@ -168,6 +168,9 @@ func DefaultTargets() []Target {
 			Hosts: []string{"api.openai.com"},
 			Routes: []Route{
 				{Method: http.MethodPost, Exact: "/v1/alpha/search", Action: ActionRelay},
+				// Codex's built-in image tool posts JSON to the Images API beside /v1/responses.
+				{Method: http.MethodPost, Exact: "/v1/images/generations", Action: ActionRelay},
+				{Method: http.MethodPost, Exact: "/v1/images/edits", Action: ActionRelay},
 				{Method: http.MethodPost, Exact: "/v1/responses/compact", Action: ActionRelay},
 				{Method: http.MethodPost, Exact: "/v1/responses", Action: ActionRelay},
 				{Method: http.MethodGet, Exact: "/v1/responses", Action: ActionBlock, RejectStatus: http.StatusUpgradeRequired},

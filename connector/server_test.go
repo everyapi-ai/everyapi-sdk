@@ -398,8 +398,8 @@ func TestDialViaHTTPProxyClearsSetupDeadlineOnReturnedTunnel(t *testing.T) {
 				return
 			}
 			go func(c net.Conn) {
-				// Answer well after the (deliberately tiny) setup deadline, so a leaked deadline surfaces as a read failure below.
-				time.Sleep(300 * time.Millisecond)
+				// Answer well after the setup deadline, so a leaked deadline surfaces as a read failure below.
+				time.Sleep(2 * time.Second)
 				_, _ = io.WriteString(c, "late")
 				_ = c.Close()
 			}(c)
@@ -444,8 +444,8 @@ func TestDialViaHTTPProxyClearsSetupDeadlineOnReturnedTunnel(t *testing.T) {
 	server.proxyForRequest = func(*http.Request) (*url.URL, error) {
 		return &url.URL{Scheme: "http", Host: proxyListener.Addr().String()}, nil
 	}
-	// Short enough that a leaked deadline kills the read long before the write.
-	server.proxySetupTimeout = 50 * time.Millisecond
+	// Long enough for CONNECT setup on a loaded CI runner (50ms timed out the CONNECT write itself), short enough that a leaked deadline kills the read well before the target writes.
+	server.proxySetupTimeout = time.Second
 
 	conn, err := server.dialTunnel(target.Addr().String())
 	if err != nil {

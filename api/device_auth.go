@@ -157,3 +157,32 @@ func (c *Client) PollUntilDone(ctx context.Context, deviceCode string, initialIn
 		}
 	}
 }
+
+// ErrCLIAuthCodeInvalid is returned by RedeemCLIAuthCode when the gateway rejects the code: unknown, expired, already used, or malformed. The gateway deliberately answers all four the same way, so the caller can only ask for a fresh code. Message carries the gateway's localized wording.
+type ErrCLIAuthCodeInvalid struct{ Message string }
+
+func (e *ErrCLIAuthCodeInvalid) Error() string { return e.Message }
+
+// RedeemCLIAuthCode exchanges a one-time code generated on the dashboard for the account's management credential. The result has the same shape as an authorized DeviceAuthPoll, so callers persist it the same way. A gateway that predates the endpoint answers 404, surfaced as an *APIError.
+func (c *Client) RedeemCLIAuthCode(ctx context.Context, code string) (*DeviceAuthPollResult, error) {
+	var env struct {
+		Success bool               `json:"success"`
+		Message string             `json:"message"`
+		Data    deviceAuthPollWire `json:"data"`
+	}
+	if err := c.do(ctx, "POST", "/api/cli/auth-code-redeem", map[string]string{"code": code}, &env); err != nil {
+		return nil, err
+	}
+	if !env.Success {
+		return nil, &ErrCLIAuthCodeInvalid{Message: env.Message}
+	}
+	if env.Data.Status != "authorized" || env.Data.AccessToken == "" {
+		return nil, fmt.Errorf("auth-code-redeem: unexpected status %q", env.Data.Status)
+	}
+	return &DeviceAuthPollResult{
+		State:       PollAuthorized,
+		AccessToken: env.Data.AccessToken,
+		UserID:      env.Data.UserID,
+		Username:    env.Data.Username,
+	}, nil
+}
